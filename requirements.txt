@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+aiosqlite
+apscheduler
+httpx
+jinja2
+python-multipart
+numpy
+scikit-learn
+email-validator
+alembic
+bcrypt
+python-jose[cryptography]
+slowapi

@@ -1,0 +1,851 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Network Flow Monitor</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: dark;
+    --void: #060a09;
+    --panel: #0d1512;
+    --panel-hi: #121d18;
+    --line: #1c2b25;
+    --line-bright: #2a4038;
+    --text: #dbe8e2;
+    --dim: #62817a;
+    --faint: #3a5049;
+    --pulse: #3ef0a3;
+    --pulse-glow: rgba(62,240,163,0.35);
+    --cyan: #3ecbf0;
+    --cyan-glow: rgba(62,203,240,0.4);
+    --warn: #f0c33e;
+    --crit: #f0563e;
+    --crit-glow: rgba(240,86,62,0.35);
+    --header-bg: rgba(6,10,9,0.85);
+    --scan-line: rgba(62,240,163,0.012);
+    --btn-ink: #04120c;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --sans: 'Inter', -apple-system, sans-serif;
+  }
+  /* ---------- Light mode: mengikuti preferensi sistem, tema tetap "siber" ---------- */
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: light;
+      --void: #f2f7f5;
+      --panel: #ffffff;
+      --panel-hi: #eaf2ee;
+      --line: #d5e3dd;
+      --line-bright: #b6cac1;
+      --text: #0e211b;
+      --dim: #4a6a5f;
+      --faint: #8ba79c;
+      --pulse: #0b9d63;
+      --pulse-glow: rgba(11,157,99,0.22);
+      --cyan: #0d84a8;
+      --cyan-glow: rgba(13,132,168,0.22);
+      --warn: #a4740a;
+      --crit: #c93a2a;
+      --crit-glow: rgba(201,58,42,0.2);
+      --header-bg: rgba(255,255,255,0.85);
+      --scan-line: rgba(11,157,99,0.02);
+      --btn-ink: #f2fff8;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--void);
+    color: var(--text);
+    font-family: var(--sans);
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 42px 42px;
+    background-position: -1px -1px;
+    background-attachment: fixed;
+    min-height: 100vh;
+    position: relative;
+  }
+  /* Scanline overlay: kesan monitor CRT, tipis dan tidak mengganggu (lebih halus di light mode) */
+  body::after {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(
+      0deg, rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px,
+      var(--scan-line) 3px, rgba(0,0,0,0) 4px
+    );
+    pointer-events: none;
+    z-index: 1;
+    animation: scan-drift 9s linear infinite;
+  }
+  @keyframes scan-drift {
+    0% { background-position-y: 0; }
+    100% { background-position-y: 200px; }
+  }
+
+  header {
+    padding: 22px 32px;
+    border-bottom: 1px solid var(--line);
+    display: flex; justify-content: space-between; align-items: center;
+    background: var(--header-bg);
+    backdrop-filter: blur(6px);
+    position: sticky; top: 0; z-index: 10;
+    box-shadow: 0 1px 0 rgba(62,240,163,0.08), 0 8px 24px -12px rgba(0,0,0,0.6);
+  }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand-mark {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--pulse);
+    box-shadow: 0 0 0 0 var(--pulse-glow), 0 0 10px var(--pulse);
+    animation: sonar 2.4s ease-out infinite;
+  }
+  @keyframes sonar {
+    0%   { box-shadow: 0 0 0 0 var(--pulse-glow), 0 0 10px var(--pulse); }
+    70%  { box-shadow: 0 0 0 10px transparent, 0 0 10px var(--pulse); }
+    100% { box-shadow: 0 0 0 0 transparent, 0 0 10px var(--pulse); }
+  }
+  h1 {
+    font-family: var(--mono); font-size: 15px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase; margin: 0;
+    color: var(--text);
+    text-shadow: 0 0 14px rgba(62,240,163,0.45), 0 0 2px rgba(62,240,163,0.6);
+  }
+  h1 span { color: var(--dim); font-weight: 400; text-shadow: none; }
+  .header-right { display: flex; align-items: center; gap: 18px; }
+  #conn-status {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--faint);
+    display: flex; align-items: center; gap: 7px;
+  }
+  #conn-status::before {
+    content: ''; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--faint); display: inline-block;
+  }
+  #conn-status.live { color: var(--pulse); }
+  #conn-status.live::before { background: var(--pulse); box-shadow: 0 0 6px var(--pulse); }
+
+  #user-chip {
+    display: none;
+    align-items: center; gap: 10px;
+    font-family: var(--mono); font-size: 12px; color: var(--dim);
+  }
+  #user-chip .email { color: var(--text); }
+  #user-chip button {
+    background: transparent; border: 1px solid var(--line); color: var(--dim);
+    padding: 5px 12px; border-radius: 2px; cursor: pointer; font-size: 10.5px;
+    font-family: var(--mono); letter-spacing: 0.04em; text-transform: uppercase;
+  }
+  #user-chip button:hover { border-color: var(--crit); color: var(--crit); }
+
+  main { padding: 32px; max-width: 1140px; margin: 0 auto; }
+
+  .panel-label {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--dim); margin: 0 0 12px 2px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .panel-label::before {
+    content: ''; width: 5px; height: 5px; background: var(--pulse);
+    box-shadow: 0 0 6px var(--pulse); flex-shrink: 0;
+  }
+
+  /* ---------- Auth screen ---------- */
+  #auth-screen {
+    min-height: calc(100vh - 71px);
+    display: flex; align-items: center; justify-content: center;
+    padding: 32px;
+  }
+  .auth-box {
+    width: 100%; max-width: 380px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+    padding: 32px; position: relative;
+    box-shadow: 0 0 0 1px rgba(62,240,163,0.05), 0 20px 60px -20px rgba(0,0,0,0.7), 0 0 40px -20px var(--pulse-glow);
+  }
+  .auth-box::before {
+    content: '';
+    position: absolute; top: -1px; left: -1px; right: -1px; height: 2px;
+    background: linear-gradient(90deg, var(--pulse), var(--cyan), transparent);
+    border-radius: 4px 4px 0 0;
+  }
+  .auth-box h2 {
+    font-family: var(--mono); font-size: 13px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--text); margin: 0 0 4px 0;
+    text-shadow: 0 0 10px rgba(62,240,163,0.35);
+  }
+  .auth-box .sub { color: var(--dim); font-size: 12.5px; margin-bottom: 22px; }
+  .auth-box label {
+    display: block; font-family: var(--mono); font-size: 10.5px; color: var(--dim);
+    text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; margin-top: 14px;
+  }
+  .auth-box input {
+    width: 100%; background: var(--void); border: 1px solid var(--line); color: var(--text);
+    padding: 11px 13px; border-radius: 2px; font-size: 13px; font-family: var(--mono);
+    outline: none; transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .auth-box input:focus { border-color: var(--pulse); box-shadow: 0 0 0 3px rgba(62,240,163,0.1); }
+  .auth-box button.submit {
+    width: 100%; margin-top: 22px;
+    background: var(--pulse); color: var(--btn-ink); border: none; padding: 12px;
+    border-radius: 2px; cursor: pointer; font-size: 12px; font-weight: 700;
+    font-family: var(--mono); letter-spacing: 0.06em; text-transform: uppercase;
+    box-shadow: 0 0 20px -4px var(--pulse-glow); transition: filter 0.15s, box-shadow 0.15s, transform 0.1s;
+  }
+  .auth-box button.submit:hover { filter: brightness(1.15); box-shadow: 0 0 26px -2px var(--pulse-glow); transform: translateY(-1px); }
+  .auth-box button.submit:active { transform: translateY(0); }
+  .auth-box button.submit:disabled { opacity: 0.5; cursor: not-allowed; }
+  .auth-switch {
+    margin-top: 18px; text-align: center; font-size: 12px; color: var(--dim);
+  }
+  .auth-switch a { color: var(--pulse); cursor: pointer; text-decoration: none; }
+  .auth-error {
+    margin-top: 14px; padding: 10px 12px; background: rgba(240,86,62,0.1);
+    border: 1px solid rgba(240,86,62,0.3); border-radius: 2px;
+    color: var(--crit); font-size: 12px; font-family: var(--mono); display: none;
+  }
+
+  /* ---------- Dashboard (setelah login) ---------- */
+  #dashboard-screen { display: none; }
+
+  form#add-form {
+    display: flex; gap: 10px; margin-bottom: 36px; flex-wrap: wrap;
+    padding: 18px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 2px;
+  }
+  form#add-form input {
+    background: var(--void); border: 1px solid var(--line); color: var(--text);
+    padding: 11px 13px; border-radius: 2px; font-size: 13px; font-family: var(--mono);
+    outline: none; transition: border-color 0.15s;
+  }
+  form#add-form input::placeholder { color: var(--faint); }
+  form#add-form input:focus { border-color: var(--pulse); }
+  form#add-form input[name="name"] { width: 170px; }
+  form#add-form input[name="url"] { flex: 1; min-width: 240px; }
+  form#add-form input[name="interval"] { width: 90px; }
+  form#add-form select {
+    background: var(--void); border: 1px solid var(--line); color: var(--text);
+    padding: 11px 13px; border-radius: 2px; font-size: 13px; font-family: var(--mono);
+    outline: none; cursor: pointer;
+  }
+  form#add-form select:focus { border-color: var(--pulse); }
+  form#add-form input[name="tcp_port"] { width: 90px; display: none; }
+  form#add-form input[name="expected_content"] { min-width: 180px; display: none; }
+  form#add-form button {
+    background: var(--pulse); color: var(--btn-ink); border: none; padding: 11px 22px;
+    border-radius: 2px; cursor: pointer; font-size: 12px; font-weight: 700;
+    font-family: var(--mono); letter-spacing: 0.06em; text-transform: uppercase;
+    box-shadow: 0 0 18px -4px var(--pulse-glow);
+    transition: filter 0.15s, box-shadow 0.15s, transform 0.1s;
+  }
+  form#add-form button:hover { filter: brightness(1.15); box-shadow: 0 0 24px -2px var(--pulse-glow); transform: translateY(-1px); }
+  form#add-form button:active { transform: translateY(0); }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 3px;
+    padding: 20px 22px; position: relative; overflow: hidden;
+    transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+  }
+  .card:hover {
+    border-color: var(--line-bright);
+    box-shadow: 0 12px 32px -16px rgba(0,0,0,0.6);
+    transform: translateY(-2px);
+  }
+  .card.state-up { border-left: 2px solid var(--pulse); box-shadow: inset 3px 0 12px -8px var(--pulse-glow); }
+  .card.state-down { border-left: 2px solid var(--crit); box-shadow: inset 3px 0 12px -8px var(--crit-glow); animation: alert-pulse 2s ease-in-out infinite; }
+  .card.state-unknown { border-left: 2px solid var(--faint); }
+  @keyframes alert-pulse {
+    0%, 100% { box-shadow: inset 3px 0 12px -8px var(--crit-glow); }
+    50% { box-shadow: inset 3px 0 20px -6px var(--crit-glow); }
+  }
+
+  .card-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+  .name { font-weight: 600; font-size: 14.5px; color: var(--text); }
+  .anomaly-badge {
+    display: none;
+    font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: 0.05em;
+    color: var(--warn); background: rgba(240,195,62,0.12); border: 1px solid rgba(240,195,62,0.35);
+    padding: 2px 7px; border-radius: 999px; margin-left: 8px; cursor: help; vertical-align: middle;
+  }
+  .anomaly-badge.show { display: inline-block; }
+  .url { color: var(--dim); font-size: 11.5px; font-family: var(--mono); margin-top: 3px; word-break: break-all; }
+
+  .signal { display: flex; align-items: center; gap: 8px; flex-shrink: 0; margin-left: 10px; }
+  .signal-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .state-up .signal-dot { background: var(--pulse); box-shadow: 0 0 8px var(--pulse-glow); animation: sonar 2s ease-out infinite; }
+  .state-down .signal-dot { background: var(--crit); box-shadow: 0 0 8px var(--crit-glow); }
+  .state-unknown .signal-dot { background: var(--faint); }
+  .signal-label { font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; }
+  .state-up .signal-label { color: var(--pulse); }
+  .state-down .signal-label { color: var(--crit); }
+  .state-unknown .signal-label { color: var(--faint); }
+
+  .readout { display: flex; gap: 22px; margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+  .readout-item .rv-label { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; }
+  .readout-item .rv-label[title] { cursor: help; border-bottom: 1px dotted var(--faint); }
+  .readout-item .rv-value { font-family: var(--mono); font-size: 17px; font-weight: 600; color: var(--text); margin-top: 3px; }
+
+  canvas { max-height: 110px; }
+
+  .card-foot { display: flex; justify-content: flex-end; gap: 6px; margin-top: 14px; }
+  .card-foot button {
+    background: transparent; border: 1px solid var(--line); color: var(--dim);
+    padding: 5px 12px; border-radius: 2px; cursor: pointer; font-size: 10.5px;
+    font-family: var(--mono); letter-spacing: 0.04em; text-transform: uppercase;
+    transition: all 0.15s;
+  }
+  .card-foot button:hover { border-color: var(--dim); color: var(--text); }
+  .card-foot button.danger:hover { border-color: var(--crit); color: var(--crit); }
+
+  #empty-state {
+    color: var(--faint); text-align: center; padding: 70px 20px;
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.04em;
+    border: 1px dashed var(--line); border-radius: 2px;
+  }
+
+  #chat-panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 2px;
+    padding: 18px; margin-bottom: 24px;
+  }
+  #chat-log {
+    display: flex; flex-direction: column; gap: 10px;
+    max-height: 280px; overflow-y: auto; margin-bottom: 14px;
+  }
+  #chat-log:empty { display: none; }
+  .chat-msg { font-size: 13px; padding: 10px 13px; border-radius: 2px; line-height: 1.5; }
+  .chat-msg.user {
+    background: rgba(91,141,239,0.1); border-left: 2px solid var(--accent, #3ef0a3);
+    color: var(--text); align-self: flex-end; max-width: 80%;
+  }
+  .chat-msg.bot {
+    background: var(--void); border-left: 2px solid var(--pulse);
+    color: var(--text); white-space: pre-line; max-width: 90%;
+  }
+  #chat-form { display: flex; gap: 10px; }
+  #chat-form input {
+    flex: 1; background: var(--void); border: 1px solid var(--line); color: var(--text);
+    padding: 11px 13px; border-radius: 2px; font-size: 13px; font-family: var(--mono);
+    outline: none;
+  }
+  #chat-form input:focus { border-color: var(--pulse); }
+  #chat-form button {
+    background: transparent; border: 1px solid var(--pulse); color: var(--pulse);
+    padding: 11px 20px; border-radius: 2px; cursor: pointer; font-size: 12px; font-weight: 700;
+    font-family: var(--mono); letter-spacing: 0.06em; text-transform: uppercase;
+  }
+  #chat-form button:hover { background: rgba(62,240,163,0.1); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="brand-mark"></span>
+    <h1>NETMONITOR <span>// network flow</span></h1>
+  </div>
+  <div class="header-right">
+    <span id="conn-status">connecting</span>
+    <div id="user-chip">
+      <span class="email" id="user-email"></span>
+      <button onclick="logout()">keluar</button>
+    </div>
+  </div>
+</header>
+
+<!-- ========== LAYAR LOGIN / REGISTER ========== -->
+<div id="auth-screen">
+  <div class="auth-box">
+    <h2 id="auth-title">// masuk</h2>
+    <p class="sub" id="auth-sub">masukkan akun untuk mulai memantau target</p>
+
+    <form id="auth-form">
+      <label>email</label>
+      <input type="email" name="email" placeholder="kamu@contoh.com" required>
+      <label>password</label>
+      <input type="password" name="password" placeholder="••••••••" required minlength="8">
+      <button type="submit" class="submit" id="auth-submit-btn">masuk</button>
+      <div class="auth-error" id="auth-error"></div>
+    </form>
+
+    <div class="auth-switch">
+      <span id="auth-switch-text">belum punya akun?</span>
+      <a id="auth-switch-link" onclick="toggleAuthMode()">daftar di sini</a>
+    </div>
+  </div>
+</div>
+
+<!-- ========== DASHBOARD (setelah login) ========== -->
+<div id="dashboard-screen">
+  <main>
+    <p class="panel-label">// tambah target</p>
+    <form id="add-form">
+      <input type="text" name="name" placeholder="nama_server" required>
+      <input type="url" name="url" placeholder="https://target.com" required>
+      <select name="check_type" id="check-type-select">
+        <option value="http">HTTP</option>
+        <option value="content">Content</option>
+        <option value="ping">Ping</option>
+        <option value="tcp">TCP Port</option>
+      </select>
+      <input type="number" name="tcp_port" placeholder="port (mis. 443)" min="1" max="65535">
+      <input type="text" name="expected_content" placeholder="teks yang harus ada">
+      <input type="number" name="interval" placeholder="interval(s)" value="10" min="3">
+      <button type="submit">+ monitor</button>
+    </form>
+
+    <p class="panel-label">// target aktif</p>
+    <div class="grid" id="targets-container">
+      <div id="empty-state" style="grid-column: 1/-1;">belum ada target — tambahkan url di atas untuk mulai memantau</div>
+    </div>
+
+    <p class="panel-label" style="margin-top:36px;">// tanya asisten</p>
+    <div id="chat-panel">
+      <div id="chat-log"></div>
+      <form id="chat-form">
+        <input type="text" name="question" placeholder="mis. server mana yang paling sering down?" autocomplete="off">
+        <button type="submit">Tanya</button>
+      </form>
+    </div>
+  </main>
+</div>
+
+<script>
+// ============================================================
+// STATE & AUTH
+// ============================================================
+let authMode = 'login'; // 'login' | 'register'
+let currentToken = localStorage.getItem('netmonitor_token') || null;
+
+const authScreen = document.getElementById('auth-screen');
+const dashboardScreen = document.getElementById('dashboard-screen');
+const userChip = document.getElementById('user-chip');
+const userEmailEl = document.getElementById('user-email');
+const authError = document.getElementById('auth-error');
+
+function showAuthScreen() {
+  authScreen.style.display = 'flex';
+  dashboardScreen.style.display = 'none';
+  userChip.style.display = 'none';
+}
+
+function showDashboard(email) {
+  authScreen.style.display = 'none';
+  dashboardScreen.style.display = 'block';
+  userChip.style.display = 'flex';
+  userEmailEl.textContent = email;
+  loadSummary();
+  connectWS();
+}
+
+function toggleAuthMode() {
+  authMode = authMode === 'login' ? 'register' : 'login';
+  document.getElementById('auth-title').textContent = authMode === 'login' ? '// masuk' : '// daftar akun';
+  document.getElementById('auth-sub').textContent = authMode === 'login'
+    ? 'masukkan akun untuk mulai memantau target'
+    : 'buat akun baru, gratis, langsung bisa monitor';
+  document.getElementById('auth-submit-btn').textContent = authMode === 'login' ? 'masuk' : 'daftar';
+  document.getElementById('auth-switch-text').textContent = authMode === 'login' ? 'belum punya akun?' : 'sudah punya akun?';
+  document.getElementById('auth-switch-link').textContent = authMode === 'login' ? 'daftar di sini' : 'masuk di sini';
+  authError.style.display = 'none';
+}
+
+async function apiFetch(path, options = {}) {
+  const headers = options.headers || {};
+  if (currentToken) headers['Authorization'] = `Bearer ${currentToken}`;
+  const res = await fetch(path, { ...options, headers });
+  if (res.status === 401) {
+    logout();
+    throw new Error('Sesi berakhir, silakan login lagi');
+  }
+  return res;
+}
+
+document.getElementById('auth-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  authError.style.display = 'none';
+  const form = e.target;
+  const email = form.email.value;
+  const password = form.password.value;
+  const btn = document.getElementById('auth-submit-btn');
+  btn.disabled = true;
+
+  try {
+    let res;
+    if (authMode === 'register') {
+      res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+    } else {
+      const body = new URLSearchParams();
+      body.append('username', email);
+      body.append('password', password);
+      res = await fetch('/api/auth/login', { method: 'POST', body });
+    }
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || 'Gagal autentikasi');
+    }
+
+    const data = await res.json();
+    currentToken = data.access_token;
+    localStorage.setItem('netmonitor_token', currentToken);
+    form.reset();
+    showDashboard(data.user.email);
+  } catch (err) {
+    authError.textContent = err.message;
+    authError.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+function logout() {
+  currentToken = null;
+  localStorage.removeItem('netmonitor_token');
+  if (currentWS) { currentWS.close(); currentWS = null; }
+  document.getElementById('targets-container').innerHTML = '<div id="empty-state" style="grid-column: 1/-1;">belum ada target — tambahkan url di atas untuk mulai memantau</div>';
+  showAuthScreen();
+}
+
+async function tryRestoreSession() {
+  if (!currentToken) { showAuthScreen(); return; }
+  try {
+    const res = await apiFetch('/api/auth/me');
+    if (!res.ok) throw new Error('invalid session');
+    const user = await res.json();
+    showDashboard(user.email);
+  } catch {
+    logout();
+  }
+}
+
+// ============================================================
+// DASHBOARD MONITORING (sama seperti sebelumnya, sekarang pakai apiFetch)
+// ============================================================
+const container = document.getElementById('targets-container');
+const emptyState = () => document.getElementById('empty-state');
+const connStatus = document.getElementById('conn-status');
+const charts = {};
+const chartData = {};
+let currentWS = null;
+
+if (typeof Chart !== 'undefined') {
+  Chart.defaults.font.family = "'JetBrains Mono', monospace";
+}
+
+async function loadSummary() {
+  const res = await apiFetch('/api/summary');
+  const summaries = await res.json();
+  container.innerHTML = '';
+  if (summaries.length === 0) {
+    container.innerHTML = '<div id="empty-state" style="grid-column: 1/-1;">belum ada target — tambahkan url di atas untuk mulai memantau</div>';
+    return;
+  }
+  for (const s of summaries) {
+    upsertCard(s.target, s.latest_check, s.uptime_percent_24h, s.avg_response_time_ms);
+    await loadHistory(s.target.id);
+  }
+}
+
+async function loadHistory(targetId) {
+  const res = await apiFetch(`/api/targets/${targetId}/checks?limit=50`);
+  const checks = await res.json();
+  chartData[targetId] = {
+    labels: checks.map(c => new Date(c.checked_at).toLocaleTimeString()),
+    data: checks.map(c => c.response_time_ms ?? 0),
+  };
+  renderChart(targetId);
+}
+
+function stateClass(isUp) {
+  if (isUp === true) return 'state-up';
+  if (isUp === false) return 'state-down';
+  return 'state-unknown';
+}
+function stateLabel(isUp) {
+  if (isUp === true) return 'ONLINE';
+  if (isUp === false) return 'OFFLINE';
+  return 'PENDING';
+}
+
+function upsertCard(target, latestCheck, uptime, avgRt) {
+  const existingEmpty = emptyState();
+  if (existingEmpty) existingEmpty.remove();
+
+  let card = document.getElementById(`card-${target.id}`);
+  const cls = stateClass(latestCheck?.is_up);
+  if (!card) {
+    card = document.createElement('div');
+    card.className = `card ${cls}`;
+    card.id = `card-${target.id}`;
+    card.innerHTML = `
+      <div class="card-head">
+        <div>
+          <div class="name">${target.name}<span class="anomaly-badge" id="anomaly-${target.id}" title="Response time jauh lebih lambat dari kebiasaan target ini">⚠ ANOMALI</span></div>
+          <div class="url">${target.url} · ${target.interval_seconds}s · <span style="color:var(--pulse)">${target.check_type.toUpperCase()}</span>${target.check_type === 'tcp' ? ':' + target.tcp_port : ''}</div>
+        </div>
+        <div class="signal">
+          <span class="signal-dot"></span>
+          <span class="signal-label" id="badge-${target.id}">${stateLabel(latestCheck?.is_up)}</span>
+        </div>
+      </div>
+      <div class="readout">
+        <div class="readout-item">
+          <div class="rv-label">latency</div>
+          <div class="rv-value" id="rt-${target.id}">–</div>
+        </div>
+        <div class="readout-item">
+          <div class="rv-label" title="Dihitung dari rata-rata SEMUA percobaan check dalam 24 jam terakhir, bukan hanya status saat ini. Target yang baru dibuat/baru diperbaiki butuh waktu sebelum angka ini mencerminkan kondisi terbaru.">uptime 24h ⓘ</div>
+          <div class="rv-value" id="uptime-${target.id}">${uptime}%</div>
+        </div>
+        <div class="readout-item">
+          <div class="rv-label">status</div>
+          <div class="rv-value" id="code-${target.id}">–</div>
+        </div>
+      </div>
+      <canvas id="chart-${target.id}"></canvas>
+      <div class="card-foot">
+        <button onclick="exportCsv(${target.id})">export csv</button>
+        <button onclick="toggleTarget(${target.id})">${target.is_active ? 'jeda' : 'lanjut'}</button>
+        <button class="danger" onclick="deleteTarget(${target.id})">hapus</button>
+      </div>
+    `;
+    container.appendChild(card);
+  } else {
+    card.className = `card ${cls}`;
+  }
+  updateBadge(target.id, latestCheck?.is_up, latestCheck?.error_message);
+  updateAnomalyBadge(target.id, latestCheck?.is_anomaly);
+  document.getElementById(`rt-${target.id}`).textContent = latestCheck?.response_time_ms ? `${latestCheck.response_time_ms}ms` : '–';
+  document.getElementById(`uptime-${target.id}`).textContent = `${uptime}%`;
+  document.getElementById(`code-${target.id}`).textContent = latestCheck?.status_code ?? (latestCheck?.error_message ? 'ERR' : '–');
+}
+
+function updateBadge(targetId, isUp, errorMsg) {
+  const badge = document.getElementById(`badge-${targetId}`);
+  const card = document.getElementById(`card-${targetId}`);
+  if (!badge || !card) return;
+  const cls = stateClass(isUp);
+  card.className = `card ${cls}`;
+  badge.textContent = stateLabel(isUp);
+  if (errorMsg) badge.title = errorMsg;
+}
+
+function updateAnomalyBadge(targetId, isAnomaly) {
+  const badge = document.getElementById(`anomaly-${targetId}`);
+  if (!badge) return;
+  badge.classList.toggle('show', !!isAnomaly);
+}
+
+function renderChart(targetId) {
+  if (typeof Chart === 'undefined') return;
+  const ctx = document.getElementById(`chart-${targetId}`);
+  if (!ctx) return;
+  const cd = chartData[targetId] || { labels: [], data: [] };
+  if (charts[targetId]) {
+    charts[targetId].data.labels = cd.labels;
+    charts[targetId].data.datasets[0].data = cd.data;
+    charts[targetId].update('none');
+    return;
+  }
+  // Ambil warna dari CSS variable saat ini supaya grafik ikut adaptif
+  // ke tema (dark/light) tanpa perlu hardcode warna di JS.
+  const cs = getComputedStyle(document.documentElement);
+  const chartPulse = cs.getPropertyValue('--pulse').trim() || '#3ef0a3';
+  const chartFaint = cs.getPropertyValue('--faint').trim() || '#3a5049';
+  const chartLine = cs.getPropertyValue('--line').trim() || '#1c2b25';
+  charts[targetId] = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: cd.labels,
+      datasets: [{
+        data: cd.data,
+        borderColor: chartPulse,
+        backgroundColor: chartPulse + '14',
+        borderWidth: 1.5,
+        tension: 0.25,
+        pointRadius: 0,
+        fill: true,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { display: false },
+        y: { beginAtZero: true, ticks: { color: chartFaint, font: { size: 9 } }, grid: { color: chartLine } }
+      }
+    }
+  });
+}
+
+// Tampilkan/sembunyikan field tambahan sesuai jenis check yang dipilih --
+// TCP butuh nomor port, Content butuh teks yang dicari, HTTP/Ping tidak
+// butuh keduanya.
+const checkTypeSelect = document.getElementById('check-type-select');
+const tcpPortInput = document.querySelector('#add-form input[name="tcp_port"]');
+const expectedContentInput = document.querySelector('#add-form input[name="expected_content"]');
+
+function updateConditionalFields() {
+  const type = checkTypeSelect.value;
+  tcpPortInput.style.display = type === 'tcp' ? 'block' : 'none';
+  expectedContentInput.style.display = type === 'content' ? 'block' : 'none';
+  tcpPortInput.required = type === 'tcp';
+  expectedContentInput.required = type === 'content';
+}
+checkTypeSelect.addEventListener('change', updateConditionalFields);
+updateConditionalFields();
+
+document.getElementById('add-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const checkType = form.check_type.value;
+  const payload = {
+    name: form.name.value,
+    url: form.url.value,
+    interval_seconds: parseInt(form.interval.value || '10', 10),
+    check_type: checkType,
+  };
+  if (checkType === 'tcp') {
+    payload.tcp_port = parseInt(form.tcp_port.value, 10);
+  }
+  if (checkType === 'content') {
+    payload.expected_content = form.expected_content.value;
+  }
+  const res = await apiFetch('/api/targets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (res.ok) {
+    form.reset();
+    form.interval.value = 10;
+    updateConditionalFields();
+    await loadSummary();
+  } else {
+    const err = await res.json();
+    const msg = Array.isArray(err.detail) ? err.detail.map(d => d.msg).join(', ') : err.detail;
+    alert('Gagal menambah target: ' + msg);
+  }
+});
+
+async function toggleTarget(id) {
+  await apiFetch(`/api/targets/${id}/toggle`, { method: 'PATCH' });
+  await loadSummary();
+}
+
+async function exportCsv(id) {
+  try {
+    const res = await apiFetch(`/api/targets/${id}/export/csv`);
+    if (!res.ok) { alert('Gagal export CSV'); return; }
+    const blob = await res.blob();
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="(.+)"/);
+    const filename = match ? match[1] : `export-${id}.csv`;
+
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  } catch (err) {
+    alert('Gagal export CSV: ' + err.message);
+  }
+}
+
+async function deleteTarget(id) {
+  if (!confirm('Hapus target ini beserta seluruh riwayatnya?')) return;
+  await apiFetch(`/api/targets/${id}`, { method: 'DELETE' });
+  document.getElementById(`card-${id}`)?.remove();
+  delete charts[id];
+  if (container.children.length === 0) {
+    container.innerHTML = '<div id="empty-state" style="grid-column: 1/-1;">belum ada target — tambahkan url di atas untuk mulai memantau</div>';
+  }
+}
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  currentWS = new WebSocket(`${proto}://${location.host}/ws`);
+  currentWS.onopen = () => { connStatus.textContent = 'live'; connStatus.className = 'live'; };
+  currentWS.onclose = () => {
+    connStatus.textContent = 'reconnecting'; connStatus.className = '';
+    if (currentToken) setTimeout(connectWS, 2000);
+  };
+  currentWS.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.type === 'check_result') {
+      // Kalau kartu untuk target ini tidak ada di DOM (mis. milik user lain
+      // yang broadcast-nya numpang lewat), getElementById return null dan
+      // pengecekan di updateBadge/renderChart otomatis mengabaikannya.
+      updateBadge(msg.target_id, msg.is_up, msg.error_message);
+      updateAnomalyBadge(msg.target_id, msg.is_anomaly);
+      const rtEl = document.getElementById(`rt-${msg.target_id}`);
+      const codeEl = document.getElementById(`code-${msg.target_id}`);
+      if (rtEl) rtEl.textContent = msg.response_time_ms ? `${msg.response_time_ms}ms` : '–';
+      if (codeEl) codeEl.textContent = msg.status_code ?? 'ERR';
+      const cd = chartData[msg.target_id] || { labels: [], data: [] };
+      cd.labels.push(new Date(msg.checked_at).toLocaleTimeString());
+      cd.data.push(msg.response_time_ms ?? 0);
+      if (cd.labels.length > 50) { cd.labels.shift(); cd.data.shift(); }
+      chartData[msg.target_id] = cd;
+      renderChart(msg.target_id);
+    }
+  };
+}
+
+// ============================================================
+// INIT
+// ============================================================
+// ============================================================
+// CHATBOT
+// ============================================================
+const chatLog = document.getElementById('chat-log');
+const chatForm = document.getElementById('chat-form');
+
+function appendChatMessage(text, sender) {
+  const div = document.createElement('div');
+  div.className = `chat-msg ${sender}`;
+  div.textContent = text;
+  chatLog.appendChild(div);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+chatForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const input = chatForm.question;
+  const question = input.value.trim();
+  if (!question) return;
+
+  appendChatMessage(question, 'user');
+  input.value = '';
+
+  try {
+    const res = await apiFetch('/api/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    });
+    const data = await res.json();
+    appendChatMessage(data.answer, 'bot');
+  } catch (err) {
+    appendChatMessage('Maaf, terjadi kesalahan saat memproses pertanyaan.', 'bot');
+  }
+});
+
+// ============================================================
+// INIT
+// ============================================================
+tryRestoreSession();
+</script>
+</body>
+</html>
