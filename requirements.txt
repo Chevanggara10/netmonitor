@@ -2,6 +2,7 @@ fastapi
 uvicorn[standard]
 sqlalchemy
 aiosqlite
+asyncpg
 apscheduler
 httpx
 jinja2

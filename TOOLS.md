@@ -8,23 +8,40 @@ dan di tahap mana sebaiknya dipakai.
 
 ## 🖥️ Hosting & Deployment
 
-### Railway ✅ (Dipilih — Hosting Utama)
+### ~~Railway~~ (DIBATALKAN — sudah tidak ada di GitHub Student Pack)
+- Rencana awal memakai Railway sudah tidak berlaku: per pengecekan
+  terbaru ke education.github.com/pack, **Railway tidak lagi terdaftar**
+  di GitHub Student Developer Pack (mungkin dulu ada, sudah dihapus).
+  Tanpa credit student, Railway berbayar (~$5/bulan minimum) tanpa tier
+  gratis permanen. Diganti dengan Heroku di bawah.
+
+### Heroku ✅ (Dipilih — Hosting Utama, pengganti Railway)
 - **Fungsi**: Platform-as-a-Service (PaaS) tempat aplikasi ini di-deploy
   agar bisa diakses publik 24/7.
-- **Kenapa dipilih**: Sangat mudah deploy langsung dari GitHub (auto-deploy
-  tiap push), tidak perlu konfigurasi server manual seperti VPS biasa.
-  Cocok untuk semua fitur di roadmap sampai Fase 6 (Auth, Alert, AI/ML
-  ringan, History/Report).
-- **Catatan penting**: Railway **tidak memberi akses root**, jadi fitur
-  **packet-level monitoring dengan Scapy** (butuh privilege `CAP_NET_RAW`)
-  **tidak akan berfungsi** di platform ini. Untuk saat ini tidak masalah
-  karena fitur itu belum masuk timeline sampai 30 September.
-- **Dipakai di**: Fase 6 — Deployment (pengganti DigitalOcean).
+- **Kenapa dipilih**: Masih terdaftar aktif di GitHub Student Developer
+  Pack dengan **credit $13 USD/bulan selama 24 bulan** -- cukup untuk
+  menutup biaya hosting skala kecil seperti proyek ini sepenuhnya gratis
+  selama periode tsb. Deploy langsung dari GitHub (`git push heroku
+  main` atau auto-deploy via GitHub integration), tidak perlu konfigurasi
+  server manual. Cocok untuk semua fitur di roadmap sampai Fase 6 (Auth,
+  Alert, AI/ML ringan, History/Report).
+- **Konfigurasi yang sudah disiapkan di repo**: `Procfile` (perintah
+  `release` menjalankan migrasi Alembic otomatis tiap deploy, `web`
+  menjalankan uvicorn dengan `$PORT` dari Heroku) dan `app/database.py`
+  yang otomatis membaca `DATABASE_URL` dari environment (dengan konversi
+  skema `postgres://` -> `postgresql+asyncpg://` untuk kompatibilitas
+  driver async).
+- **Catatan penting**: Heroku dyno standar juga **tidak memberi akses
+  root/CAP_NET_RAW**, sama seperti Railway -- fitur **packet-level
+  monitoring dengan Scapy** tetap butuh VPS terpisah (lihat Azure/Oracle
+  Cloud di bawah). Tidak masalah karena fitur itu belum masuk timeline
+  saat ini.
+- **Dipakai di**: Fase 6 — Deployment.
 
 ### Microsoft Azure (Cadangan — Khusus Scapy)
 - **Fungsi**: VPS dengan akses root penuh.
 - **Kenapa relevan**: Kalau nanti proyek lanjut ke fitur packet-level
-  monitoring (Scapy), Railway tidak bisa dipakai — perlu VPS terpisah
+  monitoring (Scapy), Heroku tidak bisa dipakai — perlu VPS terpisah
   khusus untuk fitur itu. Azure sudah tersedia di Student Pack kamu,
   tinggal pakai tanpa perlu daftar akun baru.
 - **Credit**: ~$100
@@ -47,7 +64,7 @@ dan di tahap mana sebaiknya dipakai.
   (misal `netmonitor.me`) alih-alih `IP:port`, lebih profesional untuk
   ditunjukkan di CV/portofolio.
 - **Manfaat gratis**: 1 tahun domain `.me` gratis.
-- **Dipakai di**: Setelah deployment ke Railway selesai (hubungkan domain custom di pengaturan Railway).
+- **Dipakai di**: Setelah deployment ke Heroku selesai (hubungkan domain custom di pengaturan Heroku).
 
 ---
 
@@ -133,7 +150,7 @@ dan di tahap mana sebaiknya dipakai.
 - **Kenapa relevan**: Sudah gratis untuk semua orang (bukan eksklusif student
   pack), tapi penting disebut karena akan dipakai untuk:
   - Menjalankan test otomatis sebelum merge
-  - Auto-deploy ke Railway setiap ada perubahan di branch `main`
+  - Auto-deploy ke Heroku setiap ada perubahan di branch `main`
 - **Dipakai di**: Setelah proyek stabil dan siap untuk alur deployment otomatis.
 
 ---
@@ -145,7 +162,7 @@ Urutan penggunaan yang disarankan, mengikuti roadmap tahap pengembangan:
 | Tahap | Tools yang Dipakai |
 |---|---|
 | Tahap 1 (selesai) | — (masih lokal, belum butuh tools eksternal) |
-| Deployment awal | Railway, Namecheap |
+| Deployment awal | Heroku, Namecheap |
 | Tahap 2: Alert & Auth | SendGrid, (opsional: Twilio, Auth0), 1Password |
 | Post-deployment | Sentry (error tracking) |
 | Otomatisasi | GitHub Actions |

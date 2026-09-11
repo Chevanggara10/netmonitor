@@ -28,7 +28,7 @@ dikosongkan sebagai buffer — boleh dipakai mengejar kalau ada yang molor.
 
 | Tanggal | Hari | Tugas |
 |---|---|---|
-| 28 Agu | Jumat | Setup akun tools: Railway, Namecheap, SendGrid (aktivasi GitHub Student Pack) |
+| 28 Agu | Jumat | Setup akun tools: Heroku, Namecheap, SendGrid (aktivasi GitHub Student Pack) |
 | 29–30 Agu | Sabtu–Minggu | *(buffer/istirahat)* |
 | 31 Agu | Senin | Desain skema tabel `User` & `AlertRule`; buat model & migrasi database |
 | 1 Sep | Selasa | Implementasi autentikasi dasar (register/login, hashing password, JWT) |
@@ -99,8 +99,8 @@ konsep AI/ML di proyek nyata tanpa over-engineering.
 | Tanggal | Hari | Tugas |
 |---|---|---|
 | 26–27 Sep | Sabtu–Minggu | *(buffer/istirahat)* |
-| 28 Sep | Senin | Siapkan konfigurasi deploy untuk Railway (`Procfile` atau deteksi otomatis nixpacks); migrasi database dari SQLite ke PostgreSQL (Railway menyediakan PostgreSQL managed, tinggal tambah plugin) |
-| 29 Sep | Selasa | Deploy ke Railway (connect repo GitHub, auto-deploy); hubungkan domain dari Namecheap; HTTPS otomatis dari Railway |
+| 28 Sep | Senin | Siapkan konfigurasi deploy untuk Heroku (`Procfile` sudah dibuat); migrasi database dari SQLite ke PostgreSQL (tambah addon Heroku Postgres, `DATABASE_URL` sudah didukung otomatis di `app/database.py`) |
+| 29 Sep | Selasa | Deploy ke Heroku (connect repo GitHub, auto-deploy dari branch `main`); hubungkan domain dari Namecheap; HTTPS otomatis dari Heroku |
 | 30 Sep | Rabu | Setup Sentry (error tracking) & GitHub Actions (auto-deploy); testing akhir di production; finalisasi dokumentasi |
 
 **Checkpoint (akhir September)**: Aplikasi live di domain sendiri, aman (HTTPS), sudah punya fitur AI/ML ringan, dan bisa dipantau errornya otomatis.
@@ -117,7 +117,7 @@ Fokus murni menjaga stabilitas sistem yang sudah live:
 - **Evaluasi akurasi fitur AI/ML**: cek apakah threshold anomaly detection
   (z-score) terlalu sensitif/kurang sensitif berdasarkan data nyata,
   sesuaikan ambang batas bila perlu (ini termasuk maintenance, bukan fitur baru)
-- Memantau biaya/credit Railway & Azure agar tidak kehabisan tanpa sadar
+- Memantau biaya/credit Heroku & Azure agar tidak kehabisan tanpa sadar
 - Review keamanan berkala (update dependency Python yang punya celah keamanan)
 - Backup database secara berkala
 - Mengumpulkan feedback pengguna untuk bahan perencanaan fitur November
