@@ -20,6 +20,7 @@ import httpx
 from urllib.parse import urlparse
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import MonitorTarget, CheckResult
+from app.url_safety import validate_target_url, UnsafeURLError
 
 # Jumlah percobaan ulang SETELAH percobaan pertama gagal (total percobaan = 1 + RETRY_ATTEMPTS)
 RETRY_ATTEMPTS = 2
@@ -254,7 +255,25 @@ async def perform_check(target: MonitorTarget, db: AsyncSession) -> CheckResult:
 
     Ini mengurangi false alarm dari hiccup jaringan sesaat -- target baru
     benar-benar ditandai DOWN kalau semua percobaan gagal.
+
+    Re-validasi SSRF di sini (bukan cuma saat target dibuat): domain publik
+    yang lolos validasi awal bisa saja belakangan resolve ke IP privat/internal
+    (DNS rebinding). Kalau itu terjadi, check dibatalkan dan ditandai gagal --
+    tidak pernah benar-benar melakukan request ke alamat tsb.
     """
+    try:
+        validate_target_url(target.url)
+    except UnsafeURLError as e:
+        result = CheckResult(
+            target_id=target.id, status_code=None, response_time_ms=0.0,
+            is_up=False, error_message=f"Dibatalkan (validasi keamanan URL gagal): {e}",
+            response_size_bytes=None,
+        )
+        db.add(result)
+        await db.commit()
+        await db.refresh(result)
+        return result
+
     attempt_result = await _dispatch_single_attempt(target)
     attempts_made = 1
 

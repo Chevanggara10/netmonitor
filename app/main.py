@@ -16,6 +16,12 @@ from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 import logging
 
+from dotenv import load_dotenv
+# Harus dipanggil sebelum modul app lain di-import -- auth.py dan
+# email_service.py membaca os.environ.get(...) langsung di top-level
+# modul (saat import), jadi .env wajib termuat lebih dulu.
+load_dotenv()
+
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -40,7 +46,7 @@ from app.schemas import (
 )
 from app.scheduler import scheduler, schedule_target, unschedule_target, load_all_targets_on_startup
 from app.ws_manager import manager
-from app.auth import hash_password, verify_password, create_access_token, get_current_user
+from app.auth import hash_password, verify_password, create_access_token, get_current_user, decode_access_token
 from app.email_service import send_email
 from app.url_safety import validate_target_url, UnsafeURLError
 from app.prediction import get_trend_for_target
@@ -407,16 +413,24 @@ async def ask_chatbot(
 
 
 # ---------- WebSocket: Streaming Realtime ----------
-# Catatan: WebSocket ini masih broadcast ke semua koneksi tanpa filter
-# per-user. Untuk MVP autentikasi ini cukup -- setiap browser hanya akan
-# menampilkan kartu untuk target yang dikembalikan oleh /api/summary miliknya
-# sendiri, jadi pesan untuk target user lain otomatis diabaikan di frontend
-# (lihat pengecekan `document.getElementById` yang return null kalau kartu
-# tidak ada). Penyaringan di level server bisa ditambah nanti kalau perlu.
+# Wajib bawa token JWT valid lewat query param ?token=... saat connect --
+# tanpa ini koneksi ditolak sebelum accept(). Broadcast hasil check juga
+# difilter per user_id di ws_manager.py, supaya data monitoring satu akun
+# tidak bocor ke koneksi akun lain yang sedang online.
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
+async def websocket_endpoint(websocket: WebSocket, token: str | None = None):
+    if not token:
+        await websocket.close(code=1008)  # policy violation
+        return
+    try:
+        payload = decode_access_token(token)
+        user_id = int(payload["sub"])
+    except (HTTPException, KeyError, ValueError, TypeError):
+        await websocket.close(code=1008)
+        return
+
+    await manager.connect(websocket, user_id)
     try:
         while True:
             await websocket.receive_text()

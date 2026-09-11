@@ -575,6 +575,15 @@ function stateLabel(isUp) {
   return 'PENDING';
 }
 
+// Nama & URL target adalah input bebas dari user -- di-escape sebelum
+// disisipkan ke innerHTML supaya tidak bisa dipakai untuk stored XSS
+// (mis. nama target berisi "<img src=x onerror=...>").
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str ?? '';
+  return div.innerHTML;
+}
+
 function upsertCard(target, latestCheck, uptime, avgRt) {
   const existingEmpty = emptyState();
   if (existingEmpty) existingEmpty.remove();
@@ -588,8 +597,8 @@ function upsertCard(target, latestCheck, uptime, avgRt) {
     card.innerHTML = `
       <div class="card-head">
         <div>
-          <div class="name">${target.name}<span class="anomaly-badge" id="anomaly-${target.id}" title="Response time jauh lebih lambat dari kebiasaan target ini">⚠ ANOMALI</span></div>
-          <div class="url">${target.url} · ${target.interval_seconds}s · <span style="color:var(--pulse)">${target.check_type.toUpperCase()}</span>${target.check_type === 'tcp' ? ':' + target.tcp_port : ''}</div>
+          <div class="name">${escapeHtml(target.name)}<span class="anomaly-badge" id="anomaly-${target.id}" title="Response time jauh lebih lambat dari kebiasaan target ini">⚠ ANOMALI</span></div>
+          <div class="url">${escapeHtml(target.url)} · ${target.interval_seconds}s · <span style="color:var(--pulse)">${target.check_type.toUpperCase()}</span>${target.check_type === 'tcp' ? ':' + target.tcp_port : ''}</div>
         </div>
         <div class="signal">
           <span class="signal-dot"></span>
@@ -775,7 +784,7 @@ async function deleteTarget(id) {
 
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  currentWS = new WebSocket(`${proto}://${location.host}/ws`);
+  currentWS = new WebSocket(`${proto}://${location.host}/ws?token=${encodeURIComponent(currentToken)}`);
   currentWS.onopen = () => { connStatus.textContent = 'live'; connStatus.className = 'live'; };
   currentWS.onclose = () => {
     connStatus.textContent = 'reconnecting'; connStatus.className = '';

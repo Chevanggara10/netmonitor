@@ -41,18 +41,19 @@ async def check_target_job(target_id: int):
         alert_rule = alert_result.scalar_one_or_none()
         await process_alert(target, result, alert_rule, db)
 
-        await manager.broadcast({
-            "type": "check_result",
-            "target_id": target.id,
-            "target_name": target.name,
-            "status_code": result.status_code,
-            "response_time_ms": result.response_time_ms,
-            "is_up": result.is_up,
-            "error_message": result.error_message,
-            "checked_at": result.checked_at.isoformat(),
-            "is_anomaly": result.is_anomaly,
-            "anomaly_z_score": result.anomaly_z_score,
-        })
+        if target.user_id is not None:
+            await manager.broadcast({
+                "type": "check_result",
+                "target_id": target.id,
+                "target_name": target.name,
+                "status_code": result.status_code,
+                "response_time_ms": result.response_time_ms,
+                "is_up": result.is_up,
+                "error_message": result.error_message,
+                "checked_at": result.checked_at.isoformat(),
+                "is_anomaly": result.is_anomaly,
+                "anomaly_z_score": result.anomaly_z_score,
+            }, user_id=target.user_id)
 
 
 def schedule_target(target: MonitorTarget):
