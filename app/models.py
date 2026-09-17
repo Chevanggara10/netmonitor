@@ -18,6 +18,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     hashed_password: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     targets: Mapped[list["MonitorTarget"]] = relationship(
@@ -106,3 +107,18 @@ class AlertRule(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     target: Mapped["MonitorTarget"] = relationship(back_populates="alert_rule")
+
+
+class TelegramLinkToken(Base):
+    """
+    Token sekali-pakai untuk menghubungkan akun web ke chat Telegram.
+    User generate token dari dashboard (expire 10 menit), lalu kirim
+    /link <token> ke bot -- bot cari token ini, kalau valid & belum
+    expired, isi User.telegram_chat_id dan hapus token ini.
+    """
+    __tablename__ = "telegram_link_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    expires_at: Mapped[datetime] = mapped_column(DateTime)

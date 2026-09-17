@@ -15,6 +15,7 @@ Cara menjalankan (lihat README.md untuk detail):
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 import logging
+import secrets
 
 from dotenv import load_dotenv
 # Harus dipanggil sebelum modul app lain di-import -- auth.py dan
@@ -38,7 +39,7 @@ logging.basicConfig(
 )
 
 from app.database import get_db
-from app.models import MonitorTarget, CheckResult, User, AlertRule
+from app.models import MonitorTarget, CheckResult, User, AlertRule, TelegramLinkToken
 from app.schemas import (
     TargetCreate, TargetOut, CheckResultOut, TargetSummary,
     UserCreate, UserOut, Token, AlertRuleCreate, AlertRuleOut,
@@ -52,6 +53,8 @@ from app.url_safety import validate_target_url, UnsafeURLError
 from app.prediction import get_trend_for_target
 from app.chatbot import answer_question
 from app.reporting import get_hourly_aggregate, export_checks_to_csv
+from app.excel_export import export_checks_to_excel
+from app.ml_forecast import get_forecast
 
 # Rate limiting berbasis IP pemanggil. Dipakai di endpoint yang rawan
 # disalahgunakan: login (cegah brute-force password) dan pembuatan target
@@ -278,6 +281,39 @@ async def export_target_csv(
     )
 
 
+@app.get("/api/targets/{target_id}/export/excel")
+async def export_target_excel(
+    target_id: int,
+    days: int = 30,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Download riwayat check sebuah target sebagai file Excel (.xlsx)."""
+    target = await _get_owned_target_or_404(target_id, db, current_user)
+    excel_content = await export_checks_to_excel(target.id, target.name, db, days=min(days, 365))
+
+    safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in target.name)
+    filename = f"netmonitor_{safe_name}_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+
+    return StreamingResponse(
+        iter([excel_content]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/targets/{target_id}/forecast")
+async def get_target_forecast(
+    target_id: int,
+    horizon: int = 24,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Prediksi response time N jam ke depan, pakai model terlatih kalau ada."""
+    await _get_owned_target_or_404(target_id, db, current_user)
+    return await get_forecast(target_id, db, horizon_hours=min(horizon, 168))
+
+
 @app.get("/api/summary", response_model=list[TargetSummary])
 async def get_summary(
     db: AsyncSession = Depends(get_db),
@@ -391,6 +427,34 @@ async def test_email(current_user: User = Depends(get_current_user)):
         ),
     )
     return result.to_dict()
+
+
+# ---------- Endpoint: Telegram Link ----------
+
+async def _generate_telegram_link_token(user_id: int, db: AsyncSession) -> str:
+    """Buat token sekali-pakai (expire 10 menit) untuk menghubungkan akun ke bot Telegram."""
+    token = secrets.token_urlsafe(24)
+    link = TelegramLinkToken(
+        token=token,
+        user_id=user_id,
+        expires_at=datetime.utcnow() + timedelta(minutes=10),
+    )
+    db.add(link)
+    await db.commit()
+    return token
+
+
+@app.post("/api/telegram/link-token")
+async def create_telegram_link_token(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Generate token sekali-pakai untuk dikirim user ke bot Telegram lewat
+    perintah /link <token>. Token berlaku 10 menit.
+    """
+    token = await _generate_telegram_link_token(current_user.id, db)
+    return {"token": token, "expires_in_minutes": 10, "instruction": "Kirim '/link <token>' ke bot Telegram kamu dalam 10 menit."}
 
 
 # ---------- Endpoint: Chatbot Berbasis Data ----------

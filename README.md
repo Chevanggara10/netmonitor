@@ -37,23 +37,99 @@ status code, dan grafik realtime — semua lewat dashboard di browser.
   jam supaya tetap cepat walau data mentah sudah menumpuk ribuan baris
 - **Export CSV**: download riwayat check tiap target langsung dari dashboard
 
+## Penjelasan Sistem (Arsitektur)
+
+Sistem ini punya 3 proses yang berjalan terpisah tapi berbagi 1 database:
+
+```
+                        ┌──────────────────────┐
+   Browser (dashboard) ─┤   Web Server          │
+                        │   (uvicorn app.main)  │◄──── REST API + WebSocket
+                        └──────────┬────────────┘
+                                   │ baca/tulis
+                                   ▼
+                        ┌──────────────────────┐
+                        │   Database            │
+                        │   (SQLite/PostgreSQL) │
+                        └──────────┬────────────┘
+                                   │ baca/tulis
+                        ┌──────────┴────────────┐
+                        ▼                        ▼
+              ┌──────────────────┐     ┌──────────────────────┐
+              │  Bot Telegram     │     │  Training Script      │
+              │  (run_telegram_   │     │  (train_forecast.py)  │
+              │   bot.py, polling)│     │  dijalankan manual/    │
+              └──────────────────┘     │  terjadwal (offline)  │
+                                        └──────────────────────┘
+```
+
+**Alur kerja end-to-end:**
+1. **Monitoring**: `scheduler.py` (jalan di dalam proses web server)
+   mengecek tiap target sesuai interval, hasilnya (`checker.py`) disimpan
+   sebagai baris `CheckResult` di database, lalu di-broadcast realtime ke
+   dashboard lewat WebSocket. Kalau down/anomali, `alerting.py` mengirim
+   notifikasi (email dan/atau Telegram).
+2. **Export ke Excel**: dashboard/API (`excel_export.py`) mengambil baris
+   `CheckResult` sebuah target, menulis 2 sheet (data mentah + agregat per
+   jam) ke file `.xlsx` yang bisa didownload.
+3. **Training model AI**: file Excel itu dipakai sebagai input
+   `training/train_forecast.py` (dijalankan manual atau lewat scheduler
+   OS, BUKAN bagian dari web server) — meresample data ke per-jam, melatih
+   model forecasting (Holt-Winters), lalu menyimpan hasilnya sebagai file
+   `.pkl` di `training/models/`.
+4. **Serving prediksi**: `ml_forecast.py` (bagian dari web server) memuat
+   file `.pkl` itu (kalau ada) untuk menjawab endpoint `/forecast`. Kalau
+   belum ada model terlatih untuk suatu target, otomatis fallback ke
+   `prediction.py` (regresi linear sederhana) — tidak pernah error 500
+   hanya karena training belum dijalankan.
+5. **Bot Telegram**: proses terpisah (`run_telegram_bot.py`) yang polling
+   ke server Telegram, membaca/menulis ke database yang sama. User
+   menghubungkan akun lewat `/link <token>`, lalu bisa `/status` (ringkasan
+   semua target) dan `/forecast <nama_target>` (panggil `ml_forecast.py`
+   yang sama dengan dashboard). Saat ada alert down/recovery, web server
+   memanggil `telegram_bot.send_alert()` untuk push notifikasi.
+
+**Kenapa 3 proses terpisah, bukan 1?**
+- Bot Telegram pakai *long-polling* (looping terus-menerus nunggu pesan
+  baru) — kalau digabung ke proses web server dan bot itu crash/reconnect
+  karena masalah jaringan Telegram, dashboard ikut down. Dipisah supaya
+  masing-masing independen.
+- Training model bisa makan waktu (tergantung jumlah data), tidak cocok
+  dijalankan di dalam siklus request HTTP yang harus cepat merespons.
+  Makanya training dijalankan manual/terjadwal secara terpisah, hasilnya
+  (file `.pkl`) baru "dibaca" oleh web server saat ada request forecast.
+
 ## Struktur Proyek
 ```
 netmonitor/
 ├── app/
-│   ├── main.py         # Entry point FastAPI: semua route REST + WebSocket
-│   ├── database.py     # Koneksi & setup database (SQLite)
-│   ├── models.py       # Skema tabel: User, MonitorTarget, CheckResult, AlertRule
-│   ├── schemas.py       # Validasi data request/response (Pydantic)
-│   ├── checker.py       # Logika inti: melakukan 1x pengecekan HTTP
-│   ├── scheduler.py     # Menjadwalkan pengecekan berkala per-target
-│   └── ws_manager.py    # Kelola koneksi WebSocket untuk broadcast realtime
-├── migrations/          # Migrasi database (Alembic)
+│   ├── main.py           # Entry point FastAPI: semua route REST + WebSocket
+│   ├── database.py       # Koneksi & setup database (SQLite/PostgreSQL)
+│   ├── models.py         # Skema tabel: User, MonitorTarget, CheckResult, AlertRule, TelegramLinkToken
+│   ├── schemas.py        # Validasi data request/response (Pydantic)
+│   ├── checker.py        # Logika inti: melakukan 1x pengecekan HTTP/Ping/TCP/Content
+│   ├── scheduler.py      # Menjadwalkan pengecekan berkala per-target (APScheduler)
+│   ├── ws_manager.py     # Kelola koneksi WebSocket untuk broadcast realtime
+│   ├── anomaly.py        # Deteksi anomali response time (z-score)
+│   ├── prediction.py     # Prediksi tren sederhana (regresi linear) -- fallback ml_forecast
+│   ├── reporting.py      # Agregasi per jam + export CSV
+│   ├── alerting.py       # Logika alert (email + Telegram) saat down/recovery
+│   ├── chatbot.py        # Chatbot rule-based berbasis data monitoring
+│   ├── excel_export.py   # Export riwayat check ke .xlsx (2 sheet: Raw Checks + Hourly Aggregate)
+│   ├── ml_forecast.py    # Serve model forecast AI terlatih (fallback ke prediction.py)
+│   └── telegram_bot.py   # Bot Telegram: /link, /status, /forecast, push alert
+├── training/
+│   ├── train_forecast.py # Script offline: baca Excel -> latih model Holt-Winters -> simpan .pkl
+│   └── models/            # Model AI terlatih tersimpan di sini (.pkl, tidak di-commit ke git)
+├── tests/                  # pytest: excel_export, ml_forecast, telegram_bot, alerting, dst
+├── migrations/             # Migrasi database (Alembic)
 │   ├── env.py
-│   └── versions/        # Riwayat perubahan skema, urut kronologis
+│   └── versions/           # Riwayat perubahan skema, urut kronologis
 ├── static/
-│   └── index.html       # Dashboard (frontend) — HTML+JS, tanpa build step
+│   └── index.html          # Dashboard (frontend) — HTML+JS, tanpa build step
+├── run_telegram_bot.py     # Entry point proses TERPISAH untuk bot Telegram (polling)
 ├── alembic.ini
+├── pytest.ini
 ├── requirements.txt
 └── README.md
 ```
@@ -94,6 +170,48 @@ netmonitor/
    langsung mulai memantau — hasil pertama muncul setelah 1x interval.
    Setiap akun hanya bisa melihat & mengelola targetnya sendiri.
 
+### Menjalankan Fitur Excel Export + AI Forecast + Bot Telegram
+
+Fitur monitoring dasar (langkah 1-7 di atas) sudah cukup untuk web
+berjalan. Langkah berikut ini untuk fitur tambahan (opsional, boleh
+di-skip kalau cuma butuh monitoring dasar):
+
+**a) Export data ke Excel** (butuh sudah ada beberapa hari data check):
+```bash
+curl -X GET "http://127.0.0.1:8000/api/targets/1/export/excel" \
+  -H "Authorization: Bearer <token_kamu>" -o laporan.xlsx
+```
+
+**b) Latih model AI dari Excel itu** (jalankan terpisah, bukan sambil
+server jalan — script ini berhenti sendiri setelah selesai):
+```bash
+python training/train_forecast.py --excel laporan.xlsx --target-id 1
+```
+Kalau data belum cukup (minimal 48 titik data per jam, idealnya 2-3 hari
+data terus-menerus), script akan bilang `[skip]` dan tidak membuat model
+— itu bukan error, cuma belum cukup data. Setelah model berhasil dibuat
+(`[ok] ... disimpan ...`), endpoint `/api/targets/{id}/forecast` otomatis
+memakainya tanpa perlu restart server.
+
+**c) Jalankan bot Telegram** (proses terpisah, di terminal lain):
+```bash
+python run_telegram_bot.py
+```
+Lihat bagian [Bot Telegram](#bot-telegram) di bawah untuk cara setup
+token dan menghubungkan akun.
+
+**d) (Opsional) Latih ulang model secara terjadwal.** Response time
+berubah seiring waktu, jadi model idealnya dilatih ulang berkala (mis.
+mingguan) dengan data terbaru. Di Windows, pakai **Task Scheduler**:
+- Buka Task Scheduler → Create Basic Task
+- Trigger: Weekly
+- Action: Start a program →
+  Program: `L:\...\netmonitor\venv\Scripts\python.exe`
+  Arguments: `training\train_forecast.py --excel laporan.xlsx --target-id 1`
+  Start in: folder project ini
+(Ganti path Excel dengan hasil export terbaru, atau otomatiskan langkah
+export-nya juga lewat script tambahan kalau mau full otomatis.)
+
 ## Catatan Teknis
 - Database default: SQLite (`netmonitor.db`, otomatis dibuat). Cukup untuk
   development/skala kecil. Untuk produksi/skala besar, ganti `DATABASE_URL`
@@ -132,6 +250,8 @@ sebelum deploy ke production**:
 | `RESEND_FROM_EMAIL` | Opsional | `onboarding@resend.dev` | Alamat pengirim. Default ini bisa langsung dipakai untuk testing tanpa setup domain sendiri dulu. |
 | `SENDGRID_API_KEY` | Opsional (alternatif) | *(kosong)* | API key dari [SendGrid](https://sendgrid.com), kalau lebih memilih provider ini. |
 | `SENDGRID_FROM_EMAIL` | Opsional | `alerts@netmonitor.local` | Alamat pengirim SendGrid, harus sudah diverifikasi dulu. |
+| `TELEGRAM_BOT_TOKEN` | Wajib untuk fitur Telegram | *(kosong)* | Token bot dari [@BotFather](https://t.me/BotFather). Tanpa ini, `run_telegram_bot.py` tidak bisa start dan push alert Telegram di-skip (dry-run, dicatat ke log, tidak error). |
+| `DATABASE_URL` | Opsional (wajib kalau pakai PostgreSQL) | SQLite lokal | Lihat bagian [Hosting/Deploy Production](#hostingdeploy-production) di bawah. |
 
 Kalau tidak ada satupun API key di atas yang di-set, fitur email jalan
 dalam **dry-run mode** (tidak error, tapi email tidak benar-benar
@@ -165,17 +285,129 @@ curl -X PUT http://127.0.0.1:8000/api/targets/<target_id>/alert-rule \
 - Email recovery ("sudah ONLINE lagi") otomatis terkirim sekali begitu
   target pulih setelah sempat alert down
 
+### Bot Telegram
+
+1. Bikin bot lewat [@BotFather](https://t.me/BotFather) di Telegram
+   (`/newbot`), dapat token.
+2. Tambah `TELEGRAM_BOT_TOKEN=<token_kamu>` ke file `.env`.
+3. Jalankan bot di terminal terpisah (proses sendiri, bukan bagian dari
+   `uvicorn`):
+   ```bash
+   python run_telegram_bot.py
+   ```
+4. Generate token link dari dashboard/API (berlaku 10 menit):
+   ```bash
+   curl -X POST http://127.0.0.1:8000/api/telegram/link-token \
+     -H "Authorization: Bearer <token_kamu>"
+   ```
+5. Kirim `/link <token_dari_langkah_4>` ke bot di Telegram (dalam 10
+   menit sebelum token expired).
+6. Pakai `/status` untuk ringkasan semua target, `/forecast <nama_target>`
+   untuk lihat prediksi 24 jam ke depan.
+7. Alert down/recovery otomatis ikut terkirim ke Telegram (selain email)
+   begitu akun sudah ter-link — tidak perlu setting tambahan lain.
+
+Untuk supaya bot otomatis jalan terus tanpa terminal terbuka manual,
+pakai Task Scheduler Windows (trigger "At log on" atau "At startup",
+action jalankan `run_telegram_bot.py`) atau tool seperti
+[NSSM](https://nssm.cc/) untuk menjadikannya Windows Service.
+
+## Hosting/Deploy Production
+
+Development lokal (langkah di atas) cukup untuk dicoba sendiri. Untuk
+dipakai beneran (bisa diakses dari luar, jalan terus 24/7), berikut
+kebutuhan dan langkah tambahannya.
+
+### Kebutuhan Software & Spesifikasi Minimum
+
+| Kebutuhan | Spesifikasi Minimum | Keterangan |
+|---|---|---|
+| **VPS/Server** | 1 vCPU, 1-2 GB RAM, 20 GB disk | Cukup untuk skala kecil-menengah (puluhan target, interval detik-menitan). Provider apa saja (DigitalOcean, Vultr, Hetzner, AWS Lightsail, dst) selama bisa install Python. |
+| **OS** | Linux (Ubuntu 22.04/24.04 LTS direkomendasikan) | Windows Server juga bisa, tapi tooling proses-manager (systemd) lebih umum di Linux. |
+| **Python** | 3.11+ | Sesuai yang dipakai development. |
+| **Reverse proxy** | Nginx atau Caddy | uvicorn tidak didesain menghadap internet langsung — reverse proxy urus HTTPS (SSL/TLS), lebih efisien untuk file statis (`static/index.html`), dan bisa jadi rate-limit tambahan di layer jaringan. |
+| **Sertifikat HTTPS** | Let's Encrypt (gratis, lewat Certbot) | Wajib kalau domain publik — WebSocket dan login token JWT sebaiknya tidak lewat HTTP polos. |
+| **Process manager** | `systemd` (Linux) | Supaya `uvicorn` (web) dan `run_telegram_bot.py` (bot) otomatis restart kalau crash, dan otomatis start saat server reboot. Alternatif: `supervisor` atau (kalau tetap di Windows) **NSSM**/Task Scheduler. |
+| **Database** | SQLite cukup untuk skala kecil; **PostgreSQL** direkomendasikan untuk banyak user/target bersamaan | Set `DATABASE_URL` (lihat `app/database.py`) — sudah otomatis konversi skema `postgres://` jadi `postgresql+asyncpg://`. Idealnya PostgreSQL + ekstensi **TimescaleDB** karena data ini time-series. |
+| **Domain** | Opsional tapi direkomendasikan | Supaya bisa pasang HTTPS dan diakses dengan nama yang mudah diingat, bukan IP. |
+
+### Contoh Setup systemd (Linux)
+
+Buat 2 service file terpisah — satu untuk web, satu untuk bot, supaya
+keduanya independen (bot crash tidak menjatuhkan web, dan sebaliknya):
+
+`/etc/systemd/system/netmonitor-web.service`:
+```ini
+[Unit]
+Description=Netmonitor Web Server
+After=network.target
+
+[Service]
+User=netmonitor
+WorkingDirectory=/opt/netmonitor
+Environment="PATH=/opt/netmonitor/venv/bin"
+ExecStart=/opt/netmonitor/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`/etc/systemd/system/netmonitor-bot.service`:
+```ini
+[Unit]
+Description=Netmonitor Telegram Bot
+After=network.target
+
+[Service]
+User=netmonitor
+WorkingDirectory=/opt/netmonitor
+Environment="PATH=/opt/netmonitor/venv/bin"
+ExecStart=/opt/netmonitor/venv/bin/python run_telegram_bot.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Aktifkan keduanya:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now netmonitor-web netmonitor-bot
+```
+
+Nginx tinggal reverse-proxy ke `127.0.0.1:8000` (web server tidak perlu
+dengar di port publik langsung), termasuk mem-forward header WebSocket
+(`Upgrade`/`Connection`) supaya dashboard realtime tetap jalan di balik
+proxy.
+
+### Checklist Sebelum Go-Live
+
+- [ ] `NETMONITOR_SECRET_KEY` di-set ke nilai acak (bukan default dev)
+- [ ] `TELEGRAM_BOT_TOKEN` di-set kalau fitur bot dipakai
+- [ ] Email provider (`RESEND_API_KEY` atau `SENDGRID_API_KEY`) di-set,
+      bukan dry-run
+- [ ] `DATABASE_URL` mengarah ke PostgreSQL kalau ekspektasi banyak user
+- [ ] HTTPS aktif (Let's Encrypt), bukan HTTP polos
+- [ ] `alembic upgrade head` sudah dijalankan di server production
+- [ ] Backup database terjadwal (`pg_dump` untuk PostgreSQL, atau copy
+      file `.db` untuk SQLite) — data monitoring adalah data historis
+      yang tidak bisa dibuat ulang kalau hilang
+- [ ] Training model (`train_forecast.py`) dijadwalkan berkala (mis.
+      cron mingguan) kalau fitur forecast AI dipakai serius
+
 ## Rencana Tahap Berikutnya
 Tahap ini sengaja difokuskan ke fondasi yang solid: input → cek → simpan →
 tampilkan realtime. Setelah kamu coba dan konfirmasi ini jalan baik di
 sisi kamu, kita lanjutkan ke tahap berikutnya, misalnya:
 
-- **Tahap 2**: Alert/notifikasi (email/webhook) saat target down
-- **Tahap 3**: Analisis lebih dalam — histori tren, laporan mingguan/bulanan
+- **Tahap 2**: Alert/notifikasi (email/webhook) saat target down — selesai
+- **Tahap 3**: Analisis lebih dalam — histori tren, laporan mingguan/bulanan — selesai
 - **Tahap 4**: Packet-level monitoring (Scapy) untuk traffic di level jaringan
-  jika servernya kamu kontrol penuh (butuh privilege root)
-- **Tahap 5**: Autentikasi multi-user, supaya tiap tim bisa punya daftar
-  target sendiri
+  jika servernya kamu kontrol penuh (butuh privilege root) — belum dikerjakan
+- **Tahap 5**: Export Excel + training model AI forecasting offline + bot
+  Telegram (`/link`, `/status`, `/forecast`, push alert) — selesai, lihat
+  `docs/superpowers/specs/2026-09-17-excel-ai-forecast-telegram-design.md`
 
 Silakan dicoba dulu — beri tahu saya kalau ada yang error atau ingin
 disesuaikan sebelum kita lanjut ke tahap berikutnya.

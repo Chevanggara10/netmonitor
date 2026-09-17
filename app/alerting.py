@@ -13,10 +13,20 @@ Aturan:
 import logging
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models import MonitorTarget, CheckResult, AlertRule
+from app.models import MonitorTarget, CheckResult, AlertRule, User
 from app.email_service import send_email, build_down_alert_email, build_recovery_email
+from app.telegram_bot import send_alert
 
 logger = logging.getLogger("netmonitor.alerting")
+
+
+async def _get_telegram_chat_id(target: MonitorTarget, db: AsyncSession) -> str | None:
+    """Ambil telegram_chat_id pemilik target lewat query langsung -- tidak
+    lewat target.owner (lazy-load relationship di context async bisa error)."""
+    if target.user_id is None:
+        return None
+    user = await db.get(User, target.user_id)
+    return user.telegram_chat_id if user else None
 
 
 async def process_alert(target: MonitorTarget, result: CheckResult, alert_rule: AlertRule | None, db: AsyncSession) -> None:
@@ -43,22 +53,37 @@ async def _handle_down(target: MonitorTarget, result: CheckResult, alert_rule: A
         or datetime.utcnow() - alert_rule.last_alert_sent_at >= timedelta(minutes=alert_rule.cooldown_minutes)
     )
 
-    if threshold_reached and cooldown_passed and alert_rule.notify_email:
-        subject, body = build_down_alert_email(
-            target_name=target.name,
-            target_url=target.url,
-            error_message=result.error_message,
-            consecutive_failures=alert_rule.consecutive_failures,
-        )
-        email_result = await send_email(alert_rule.notify_email, subject, body)
-        if email_result.sent or email_result.dry_run:
+    if threshold_reached and cooldown_passed:
+        sent_anything = False
+
+        if alert_rule.notify_email:
+            subject, body = build_down_alert_email(
+                target_name=target.name,
+                target_url=target.url,
+                error_message=result.error_message,
+                consecutive_failures=alert_rule.consecutive_failures,
+            )
+            email_result = await send_email(alert_rule.notify_email, subject, body)
+            sent_anything = sent_anything or email_result.sent or email_result.dry_run
+            logger.info(
+                f"Alert DOWN untuk target={target.id} ({target.name}): "
+                f"consecutive_failures={alert_rule.consecutive_failures}, {email_result.detail}"
+            )
+
+        chat_id = await _get_telegram_chat_id(target, db)
+        if chat_id:
+            message = (
+                f"\U0001F534 DOWN: {target.name} ({target.url})\n"
+                f"Error: {result.error_message or 'tidak diketahui'}\n"
+                f"Gagal berturut-turut: {alert_rule.consecutive_failures}x"
+            )
+            await send_alert(chat_id, message)
+            sent_anything = True
+
+        if sent_anything:
             # Update last_alert_sent_at bahkan saat dry-run, supaya perilaku
             # cooldown tetap bisa diuji/diverifikasi tanpa API key sungguhan.
             alert_rule.last_alert_sent_at = datetime.utcnow()
-        logger.info(
-            f"Alert DOWN untuk target={target.id} ({target.name}): "
-            f"consecutive_failures={alert_rule.consecutive_failures}, {email_result.detail}"
-        )
 
     await db.commit()
 
@@ -72,10 +97,15 @@ async def _handle_up(target: MonitorTarget, alert_rule: AlertRule, db: AsyncSess
         and alert_rule.last_alert_sent_at is not None
     )
 
-    if was_in_alerted_down_state and alert_rule.notify_email:
-        subject, body = build_recovery_email(target_name=target.name, target_url=target.url)
-        email_result = await send_email(alert_rule.notify_email, subject, body)
-        logger.info(f"Alert RECOVERY untuk target={target.id} ({target.name}): {email_result.detail}")
+    if was_in_alerted_down_state:
+        if alert_rule.notify_email:
+            subject, body = build_recovery_email(target_name=target.name, target_url=target.url)
+            email_result = await send_email(alert_rule.notify_email, subject, body)
+            logger.info(f"Alert RECOVERY untuk target={target.id} ({target.name}): {email_result.detail}")
+
+        chat_id = await _get_telegram_chat_id(target, db)
+        if chat_id:
+            await send_alert(chat_id, f"\U0001F7E2 RECOVERY: {target.name} ({target.url}) sudah ONLINE lagi.")
 
     if alert_rule.consecutive_failures != 0 or alert_rule.last_alert_sent_at is not None:
         alert_rule.consecutive_failures = 0

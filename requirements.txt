@@ -15,3 +15,10 @@ bcrypt
 python-jose[cryptography]
 slowapi
 python-dotenv
+openpyxl
+pytest
+pytest-asyncio
+statsmodels
+joblib
+pandas
+python-telegram-bot
