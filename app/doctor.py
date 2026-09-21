@@ -25,7 +25,7 @@ REQUIRED_MODULES = [
     "telegram", "matplotlib", "dotenv",
 ]
 DEFAULT_SECRET = "dev-secret-key-ganti-saat-production"
-WEB_PORT = 8000
+WEB_PORT = int(os.environ.get("PORT", "8000"))  # Railway/Heroku memberi $PORT
 
 
 @dataclass
@@ -144,7 +144,7 @@ def check_database(url: str | None = None, head_revision: str | None = None) -> 
 def check_port(port: int, label: str) -> CheckResult:
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        s.bind(("127.0.0.1", port))
+        s.bind(("0.0.0.0" if os.environ.get("NETMONITOR_HOST") == "0.0.0.0" else "127.0.0.1", port))
     except OSError:
         return CheckResult(f"Port {port} ({label})", "fail", "Port sudah dipakai program lain.",
                            "Tutup instance Netmonitor lain yang sedang berjalan, lalu coba lagi.")
