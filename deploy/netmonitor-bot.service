@@ -1,0 +1,17 @@
+[Unit]
+Description=Netmonitor bot Telegram
+After=network-online.target netmonitor-web.service
+Wants=network-online.target
+
+[Service]
+User=netmonitor
+WorkingDirectory=/opt/netmonitor
+EnvironmentFile=/opt/netmonitor/.env
+ExecStart=/opt/netmonitor/venv/bin/python run_telegram_bot.py
+Restart=on-failure
+# Kode 3 = bot ditolak (token kosong / instance lain): jangan restart-loop.
+RestartPreventExitStatus=3
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

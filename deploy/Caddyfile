@@ -1,0 +1,5 @@
+# HTTPS otomatis (Let's Encrypt). Ganti monitor.contoh.com dengan domain Namecheap Anda.
+monitor.contoh.com {
+	encode gzip
+	reverse_proxy 127.0.0.1:8000
+}
