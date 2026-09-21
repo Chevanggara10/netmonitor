@@ -38,6 +38,9 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
+from app.log_safety import install_token_redaction
+install_token_redaction()
+
 from app.database import get_db
 from app.models import MonitorTarget, CheckResult, User, AlertRule, TelegramLinkToken
 from app.schemas import (

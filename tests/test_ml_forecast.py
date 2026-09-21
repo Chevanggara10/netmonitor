@@ -20,7 +20,8 @@ async def test_get_forecast_uses_trained_model_when_present(db_session, sample_t
     _MODEL_CACHE.clear()
     monkeypatch.setattr("app.ml_forecast.MODELS_DIR", str(tmp_path))
 
-    dates = pd.date_range("2026-01-01", periods=72, freq="h")
+    end = pd.Timestamp.now("UTC").tz_localize(None).floor("h")
+    dates = pd.date_range(end=end, periods=72, freq="h")
     series = pd.Series([100 + (i % 24) for i in range(72)], index=dates)
     model = ExponentialSmoothing(series, trend="add", seasonal="add", seasonal_periods=24).fit()
     joblib.dump(model, os.path.join(str(tmp_path), f"{sample_target.id}.pkl"))
