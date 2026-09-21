@@ -22,6 +22,8 @@ async def check_target_job(target_id: int):
         if not target or not target.is_active:
             return
         result = await perform_check(target, db)
+        if result is None:  # target dihapus saat pengecekan berjalan
+            return
 
         # Anomaly detection: hanya relevan untuk hasil yang berhasil (UP) --
         # kalau targetnya down, itu sudah jelas bukan "anomali" biasa, itu

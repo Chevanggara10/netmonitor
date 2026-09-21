@@ -99,6 +99,21 @@ async def test_link_token_is_rate_limited(client, sample_user):
     assert 429 in codes[5:]
 
 
+async def test_deleting_target_removes_its_history_and_alert_rule(client, db_session, sample_user, sample_target):
+    from app.models import AlertRule, CheckResult
+    await add_check_results(db_session, sample_target.id, count=4)
+    db_session.add(AlertRule(target_id=sample_target.id))
+    await db_session.commit()
+    target_id = sample_target.id
+
+    response = await client.delete(f"/api/targets/{target_id}", headers=_auth(sample_user))
+
+    assert response.status_code == 200
+    left_checks = (await db_session.execute(select(CheckResult).where(CheckResult.target_id == target_id))).scalars().all()
+    left_rules = (await db_session.execute(select(AlertRule).where(AlertRule.target_id == target_id))).scalars().all()
+    assert left_checks == [] and left_rules == []
+
+
 async def test_telegram_status_and_unlink_roundtrip(client, db_session, sample_user):
     assert (await client.get("/api/telegram/status", headers=_auth(sample_user))).json() == {"linked": False}
 

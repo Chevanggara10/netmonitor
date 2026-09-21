@@ -18,6 +18,7 @@ import re
 import time
 import httpx
 from urllib.parse import urlparse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import MonitorTarget, CheckResult
 from app.url_safety import validate_target_url, UnsafeURLError
@@ -246,7 +247,7 @@ async def _dispatch_single_attempt(target: MonitorTarget) -> dict:
         return await _http_attempt(target.url)
 
 
-async def perform_check(target: MonitorTarget, db: AsyncSession) -> CheckResult:
+async def perform_check(target: MonitorTarget, db: AsyncSession) -> CheckResult | None:
     """
     Melakukan pengecekan ke target sesuai check_type-nya, dengan retry:
     kalau percobaan pertama gagal, dicoba lagi sampai RETRY_ATTEMPTS kali
@@ -287,6 +288,15 @@ async def perform_check(target: MonitorTarget, db: AsyncSession) -> CheckResult:
     if not attempt_result["is_up"] and attempts_made > 1:
         original_error = attempt_result["error_message"] or "Unknown error"
         attempt_result["error_message"] = f"{original_error} (gagal setelah {attempts_made}x percobaan)"
+
+    # Pengecekan (dengan retry) bisa berjalan beberapa detik; kalau user menghapus
+    # target selama itu, hasilnya dibuang -- kalau disimpan jadi baris yatim yang
+    # bisa "menempel" ke target baru karena SQLite memakai ulang ID.
+    still_exists = (await db.execute(
+        select(MonitorTarget.id).where(MonitorTarget.id == target.id)
+    )).scalar_one_or_none()
+    if still_exists is None:
+        return None
 
     result = CheckResult(
         target_id=target.id,
