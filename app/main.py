@@ -28,7 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -285,7 +285,9 @@ async def export_target_csv(
 
 
 @app.get("/api/targets/{target_id}/export/excel")
+@limiter.limit("10/minute")
 async def export_target_excel(
+    request: Request,
     target_id: int,
     days: int = 30,
     db: AsyncSession = Depends(get_db),
@@ -293,7 +295,8 @@ async def export_target_excel(
 ):
     """Download riwayat check sebuah target sebagai file Excel (.xlsx)."""
     target = await _get_owned_target_or_404(target_id, db, current_user)
-    excel_content = await export_checks_to_excel(target.id, target.name, db, days=min(days, 365))
+    # export_checks_to_excel meng-clamp days ke rentang valid (1..3650).
+    excel_content = await export_checks_to_excel(target.id, target.name, db, days=days)
 
     safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in target.name)
     filename = f"netmonitor_{safe_name}_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
@@ -306,7 +309,9 @@ async def export_target_excel(
 
 
 @app.get("/api/targets/{target_id}/forecast")
+@limiter.limit("30/minute")
 async def get_target_forecast(
+    request: Request,
     target_id: int,
     horizon: int = 24,
     db: AsyncSession = Depends(get_db),
@@ -314,7 +319,8 @@ async def get_target_forecast(
 ):
     """Prediksi response time N jam ke depan, pakai model terlatih kalau ada."""
     await _get_owned_target_or_404(target_id, db, current_user)
-    return await get_forecast(target_id, db, horizon_hours=min(horizon, 168))
+    # get_forecast meng-clamp horizon ke 1..168.
+    return await get_forecast(target_id, db, horizon_hours=horizon)
 
 
 @app.get("/api/summary", response_model=list[TargetSummary])
@@ -435,29 +441,57 @@ async def test_email(current_user: User = Depends(get_current_user)):
 # ---------- Endpoint: Telegram Link ----------
 
 async def _generate_telegram_link_token(user_id: int, db: AsyncSession) -> str:
-    """Buat token sekali-pakai (expire 10 menit) untuk menghubungkan akun ke bot Telegram."""
+    """
+    Buat token sekali-pakai (expire 10 menit) untuk menghubungkan akun ke bot
+    Telegram. Hanya 1 token aktif per user (yang lama hangus), dan token
+    kedaluwarsa milik siapa pun dibersihkan supaya tabel tidak menumpuk.
+    """
+    now = datetime.utcnow()
+    await db.execute(delete(TelegramLinkToken).where(
+        (TelegramLinkToken.user_id == user_id) | (TelegramLinkToken.expires_at < now)
+    ))
     token = secrets.token_urlsafe(24)
-    link = TelegramLinkToken(
-        token=token,
-        user_id=user_id,
-        expires_at=datetime.utcnow() + timedelta(minutes=10),
-    )
-    db.add(link)
+    db.add(TelegramLinkToken(token=token, user_id=user_id, expires_at=now + timedelta(minutes=10)))
     await db.commit()
     return token
 
 
 @app.post("/api/telegram/link-token")
+@limiter.limit("5/minute")
 async def create_telegram_link_token(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
     Generate token sekali-pakai untuk dikirim user ke bot Telegram lewat
-    perintah /link <token>. Token berlaku 10 menit.
+    perintah /link KODE. Token berlaku 10 menit.
     """
     token = await _generate_telegram_link_token(current_user.id, db)
-    return {"token": token, "expires_in_minutes": 10, "instruction": "Kirim '/link <token>' ke bot Telegram kamu dalam 10 menit."}
+    return {
+        "token": token,
+        "command": f"/link {token}",
+        "expires_in_minutes": 10,
+        "instruction": f"Kirim pesan '/link {token}' ke bot Telegram kamu dalam 10 menit.",
+    }
+
+
+@app.get("/api/telegram/status")
+async def telegram_status(current_user: User = Depends(get_current_user)):
+    """Apakah akun ini sudah terhubung ke chat Telegram (dipakai dashboard)."""
+    return {"linked": bool(current_user.telegram_chat_id)}
+
+
+@app.delete("/api/telegram/link")
+async def telegram_unlink(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Putuskan koneksi Telegram (idempoten)."""
+    if current_user.telegram_chat_id:
+        current_user.telegram_chat_id = None
+        await db.commit()
+    return {"linked": False}
 
 
 # ---------- Endpoint: Chatbot Berbasis Data ----------

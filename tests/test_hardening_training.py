@@ -35,6 +35,12 @@ def _bundle(path):
     return joblib.load(path)
 
 
+def test_training_and_serving_share_the_same_absolute_models_dir():
+    from app import ml_forecast
+    assert os.path.isabs(train_forecast.DEFAULT_MODELS_DIR)
+    assert os.path.normcase(train_forecast.DEFAULT_MODELS_DIR) == os.path.normcase(ml_forecast.MODELS_DIR)
+
+
 def test_missing_raw_checks_sheet_raises_clear_error(tmp_path):
     path = str(tmp_path / "x.xlsx")
     _make_excel([], path, sheet="SheetLain")

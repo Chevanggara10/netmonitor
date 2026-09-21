@@ -39,6 +39,8 @@ MAX_INTERPOLATE_GAP_HOURS = 6
 # Format bundle .pkl (dibaca app/ml_forecast.py).
 MODEL_FORMAT_VERSION = 1
 REQUIRED_COLUMNS = ("checked_at", "response_time_ms")
+# Absolut & sama dengan app.ml_forecast.MODELS_DIR, apa pun folder tempat script dijalankan.
+DEFAULT_MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 
 
 class TrainingDataError(ValueError):
@@ -154,7 +156,7 @@ def _atomic_dump(bundle: dict, final_path: str) -> None:
             os.remove(tmp_path)
 
 
-def train_and_save(excel_path: str, target_id: int, output_dir: str = "training/models") -> str | None:
+def train_and_save(excel_path: str, target_id: int, output_dir: str = DEFAULT_MODELS_DIR) -> str | None:
     raw_rows = read_raw_checks(excel_path)
     series = prepare_training_series(raw_rows)
 
@@ -195,7 +197,7 @@ def main():
     parser = argparse.ArgumentParser(description="Training model forecast dari Excel export Netmonitor.")
     parser.add_argument("--excel", required=True, help="Path ke file .xlsx hasil export")
     parser.add_argument("--target-id", type=int, required=True, help="ID target monitoring")
-    parser.add_argument("--output-dir", default="training/models")
+    parser.add_argument("--output-dir", default=DEFAULT_MODELS_DIR)
     args = parser.parse_args()
 
     try:
