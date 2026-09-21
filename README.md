@@ -4,6 +4,30 @@ Aplikasi web untuk memantau server/website: kamu input URL, sistem otomatis
 mengecek secara berkala dan menampilkan status (UP/DOWN), response time,
 status code, dan grafik realtime — semua lewat dashboard di browser.
 
+## Mulai Cepat (3 langkah)
+
+1. **Klik ganda `start.bat`.** Pertama kali, ia membuat lingkungan Python dan memasang paket sendiri.
+2. **Tunggu browser terbuka** di http://127.0.0.1:8000 lalu daftar/masuk dan tambah target.
+3. **Hubungkan Telegram:** di dashboard klik *Hubungkan Telegram*, salin perintah `/link KODE`, kirim ke bot Anda.
+
+`start.bat` menjalankan `run_all.py`: migrasi database, pemeriksaan (`python doctor.py`), lalu web + bot
+dengan auto-restart bila salah satu mati. Tekan Ctrl+C untuk berhenti. Agar jalan otomatis saat login
+Windows, klik ganda `install_autostart.bat` (cabut: `schtasks /Delete /TN Netmonitor /F`).
+
+### Masalah umum dan solusi
+
+| Gejala | Penyebab | Solusi |
+|---|---|---|
+| `[GAGAL] Port 8000 ... dipakai` | Netmonitor lain sudah jalan | Tutup jendela lama, atau buka http://127.0.0.1:8000 langsung |
+| `[GAGAL] Paket Python` | Paket belum terpasang | Klik `start.bat` (memasang otomatis) |
+| `[GAGAL] Bot Telegram` token ditolak | Token salah/dicabut atau tanpa internet | Cek internet; buat token baru di @BotFather, isi `TELEGRAM_BOT_TOKEN` di `.env` |
+| Bot tidak dijalankan | `TELEGRAM_BOT_TOKEN` kosong | Isi token di `.env` |
+| Bot berhenti dan tidak hidup lagi | Ada instance bot lain (kode keluar 3) | Tutup bot lain, jalankan ulang `start.bat` |
+| Kartu Telegram: "Tidak bisa terhubung ke server" | Sistem tidak berjalan | Jalankan `start.bat` |
+| Tombol kirim laporan: "Hubungkan Telegram dulu" | Akun belum ditautkan | Klik *Hubungkan Telegram* |
+| Prediksi memakai "tren linear" | Data belum cukup untuk model AI (butuh >48 jam kontinu) | Biarkan sistem menyala; latih model: `python -m training.train_forecast` |
+| Database rusak | Mati listrik saat menulis | Salin backup terbaru dari `backups/` menjadi `netmonitor.db` |
+
 ## Fitur di Tahap 1 ini
 - Input URL target langsung dari dashboard (tanpa perlu edit kode/config)
 - Pengecekan otomatis berkala (interval bisa diatur per-target)

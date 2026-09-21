@@ -301,6 +301,36 @@
   .card-foot button:hover { border-color: var(--dim); color: var(--text); }
   .card-foot button.danger:hover { border-color: var(--crit); color: var(--crit); }
 
+  .tg-card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 3px;
+    padding: 16px 18px; margin-bottom: 26px; display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+  }
+  .tg-card .tg-info { flex: 1 1 260px; font-size: 13px; color: var(--dim); line-height: 1.5; }
+  .tg-card .tg-info strong { color: var(--text); }
+  .tg-card .tg-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .tg-card button, .tg-code button {
+    background: transparent; border: 1px solid var(--line-bright); color: var(--text);
+    padding: 7px 14px; border-radius: 2px; cursor: pointer; font-size: 11px;
+    font-family: var(--mono); letter-spacing: 0.04em; text-transform: uppercase;
+  }
+  .tg-card button:hover, .tg-code button:hover { border-color: var(--pulse); color: var(--pulse); }
+  .tg-card button:disabled { opacity: 0.5; cursor: wait; }
+  .tg-code { flex-basis: 100%; display: none; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .tg-code code {
+    font-family: var(--mono); font-size: 15px; padding: 8px 12px; background: var(--void);
+    border: 1px dashed var(--pulse); border-radius: 2px; color: var(--pulse); user-select: all;
+  }
+  .tg-code .tg-hint { font-size: 12px; color: var(--dim); flex-basis: 100%; }
+  #toast {
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); z-index: 50;
+    background: var(--panel-hi); border: 1px solid var(--line-bright); color: var(--text);
+    padding: 10px 18px; border-radius: 3px; font-size: 13px; max-width: 90vw;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.35); display: none;
+  }
+  #toast.err { border-color: var(--crit); color: var(--crit); }
+  #toast.ok { border-color: var(--pulse); }
+  .forecast-note { font-family: var(--mono); font-size: 11px; color: var(--dim); margin-top: 10px; display: none; }
+
   #empty-state {
     color: var(--faint); text-align: center; padding: 70px 20px;
     font-family: var(--mono); font-size: 12px; letter-spacing: 0.04em;
@@ -381,6 +411,17 @@
 <!-- ========== DASHBOARD (setelah login) ========== -->
 <div id="dashboard-screen">
   <main>
+    <p class="panel-label">// notifikasi &amp; laporan telegram</p>
+    <div class="tg-card" id="tg-card">
+      <div class="tg-info" id="tg-info">memeriksa status Telegram…</div>
+      <div class="tg-actions" id="tg-actions"></div>
+      <div class="tg-code" id="tg-code">
+        <code id="tg-code-text"></code>
+        <button type="button" onclick="copyTelegramCommand()">salin</button>
+        <span class="tg-hint">Buka bot Telegram Anda, tempel perintah ini lalu kirim. Berlaku 10 menit.</span>
+      </div>
+    </div>
+
     <p class="panel-label">// tambah target</p>
     <form id="add-form">
       <input type="text" name="name" placeholder="nama_server" required>
@@ -439,6 +480,7 @@ function showDashboard(email) {
   userEmailEl.textContent = email;
   loadSummary();
   connectWS();
+  loadTelegramStatus();
 }
 
 function toggleAuthMode() {
@@ -620,8 +662,11 @@ function upsertCard(target, latestCheck, uptime, avgRt) {
         </div>
       </div>
       <canvas id="chart-${target.id}"></canvas>
+      <div class="forecast-note" id="forecast-${target.id}"></div>
       <div class="card-foot">
         <button onclick="exportCsv(${target.id})">export csv</button>
+        <button onclick="exportExcel(${target.id})">export excel</button>
+        <button onclick="showForecast(${target.id})">prediksi</button>
         <button onclick="toggleTarget(${target.id})">${target.is_active ? 'jeda' : 'lanjut'}</button>
         <button class="danger" onclick="deleteTarget(${target.id})">hapus</button>
       </div>
@@ -750,14 +795,41 @@ async function toggleTarget(id) {
   await loadSummary();
 }
 
-async function exportCsv(id) {
+// ---------- Pesan ramah (toast) & penerjemah galat ----------
+let toastTimer = null;
+function toast(message, kind = 'ok') {
+  let el = document.getElementById('toast');
+  if (!el) { el = document.createElement('div'); el.id = 'toast'; document.body.appendChild(el); }
+  el.textContent = message;
+  el.className = kind;
+  el.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.style.display = 'none'; }, 5000);
+}
+
+// Ubah respons galat API (JSON mentah/HTTP code) jadi kalimat yang bisa ditindaklanjuti.
+async function friendlyError(res, fallback) {
+  if (res.status === 429) return 'Terlalu sering. Tunggu sebentar lalu coba lagi.';
+  if (res.status === 404) return 'Data tidak ditemukan (mungkin sudah dihapus). Muat ulang halaman.';
+  if (res.status >= 500) return 'Server sedang bermasalah. Coba lagi sebentar lagi.';
   try {
-    const res = await apiFetch(`/api/targets/${id}/export/csv`);
-    if (!res.ok) { alert('Gagal export CSV'); return; }
+    const data = await res.json();
+    if (typeof data.detail === 'string') return data.detail;
+  } catch (_) { /* bukan JSON */ }
+  return fallback;
+}
+function networkError(err) {
+  return err instanceof TypeError ? 'Tidak bisa terhubung ke server. Pastikan sistem berjalan.' : err.message;
+}
+
+async function downloadFile(path, fallbackName, label) {
+  try {
+    const res = await apiFetch(path);
+    if (!res.ok) { toast(await friendlyError(res, `Gagal export ${label}.`), 'err'); return; }
     const blob = await res.blob();
     const disposition = res.headers.get('Content-Disposition') || '';
     const match = disposition.match(/filename="(.+)"/);
-    const filename = match ? match[1] : `export-${id}.csv`;
+    const filename = match ? match[1] : fallbackName;
 
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -767,8 +839,128 @@ async function exportCsv(id) {
     a.click();
     a.remove();
     window.URL.revokeObjectURL(url);
+    toast(`${label} diunduh: ${filename}`);
   } catch (err) {
-    alert('Gagal export CSV: ' + err.message);
+    toast(`Gagal export ${label}: ${networkError(err)}`, 'err');
+  }
+}
+function exportCsv(id) { return downloadFile(`/api/targets/${id}/export/csv`, `export-${id}.csv`, 'CSV'); }
+function exportExcel(id) { return downloadFile(`/api/targets/${id}/export/excel`, `export-${id}.xlsx`, 'Excel'); }
+
+async function showForecast(id) {
+  const note = document.getElementById(`forecast-${id}`);
+  if (!note) return;
+  note.style.display = 'block';
+  note.textContent = 'menghitung prediksi…';
+  try {
+    const res = await apiFetch(`/api/targets/${id}/forecast?horizon=24`);
+    if (!res.ok) { note.textContent = await friendlyError(res, 'Prediksi gagal.'); return; }
+    const f = await res.json();
+    const vals = (f.forecast_ms || []).filter(v => v !== null);
+    if (!vals.length) { note.textContent = 'Belum cukup data untuk prediksi.'; return; }
+    const avg = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+    const max = Math.round(Math.max(...vals));
+    const src = f.source === 'trained_model' ? 'model AI' : 'tren linear (data belum cukup untuk model AI)';
+    note.textContent = `24 jam ke depan: rata-rata ${avg} ms, puncak ${max} ms — sumber: ${src}`;
+  } catch (err) {
+    note.textContent = networkError(err);
+  }
+}
+
+// ---------- Telegram ----------
+let tgCommand = '';
+async function loadTelegramStatus() {
+  const info = document.getElementById('tg-info');
+  const actions = document.getElementById('tg-actions');
+  document.getElementById('tg-code').style.display = 'none';
+  try {
+    const res = await apiFetch('/api/telegram/status');
+    if (!res.ok) throw new Error(await friendlyError(res, 'Status Telegram tidak tersedia.'));
+    const { linked } = await res.json();
+    if (linked) {
+      info.innerHTML = '<strong>Telegram terhubung.</strong> Alert down/pulih dan laporan bulanan (tanggal 1) dikirim otomatis ke chat Anda.';
+      actions.innerHTML = `
+        <button id="tg-report-prev" onclick="sendReportNow('previous')">kirim laporan bulan lalu</button>
+        <button id="tg-report-cur" onclick="sendReportNow('current')">kirim laporan bulan ini</button>
+        <button onclick="unlinkTelegram()">putuskan</button>`;
+    } else {
+      info.innerHTML = '<strong>Telegram belum terhubung.</strong> Hubungkan untuk menerima alert dan laporan bulanan bergrafik + evaluasi AI.';
+      actions.innerHTML = '<button id="tg-link-btn" onclick="createTelegramCode()">hubungkan telegram</button>';
+    }
+  } catch (err) {
+    info.textContent = networkError(err);
+    actions.innerHTML = '<button onclick="loadTelegramStatus()">coba lagi</button>';
+  }
+}
+
+async function createTelegramCode() {
+  const btn = document.getElementById('tg-link-btn');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await apiFetch('/api/telegram/link-token', { method: 'POST' });
+    if (!res.ok) { toast(await friendlyError(res, 'Gagal membuat kode.'), 'err'); return; }
+    const data = await res.json();
+    tgCommand = data.command || `/link ${data.token}`;
+    document.getElementById('tg-code-text').textContent = tgCommand;
+    document.getElementById('tg-code').style.display = 'flex';
+    pollTelegramLinked();
+  } catch (err) {
+    toast(networkError(err), 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function copyTelegramCommand() {
+  const done = () => toast('Perintah disalin. Tempel di bot Telegram.');
+  if (navigator.clipboard) navigator.clipboard.writeText(tgCommand).then(done, () => toast('Salin manual: ' + tgCommand, 'err'));
+  else toast('Salin manual: ' + tgCommand, 'err');
+}
+
+// Setelah kode dibuat, cek tiap 3 dtk (maks 10 menit) sampai terhubung.
+let tgPoll = null;
+function pollTelegramLinked() {
+  clearInterval(tgPoll);
+  const until = Date.now() + 10 * 60 * 1000;
+  tgPoll = setInterval(async () => {
+    if (Date.now() > until || !currentToken) { clearInterval(tgPoll); return; }
+    try {
+      const res = await apiFetch('/api/telegram/status');
+      if (res.ok && (await res.json()).linked) {
+        clearInterval(tgPoll);
+        toast('Telegram berhasil terhubung!');
+        loadTelegramStatus();
+      }
+    } catch (_) { /* coba lagi pada siklus berikutnya */ }
+  }, 3000);
+}
+
+async function unlinkTelegram() {
+  if (!confirm('Putuskan Telegram? Alert dan laporan tidak akan dikirim lagi.')) return;
+  try {
+    const res = await apiFetch('/api/telegram/link', { method: 'DELETE' });
+    if (!res.ok) { toast(await friendlyError(res, 'Gagal memutuskan.'), 'err'); return; }
+    toast('Telegram diputuskan.');
+    loadTelegramStatus();
+  } catch (err) {
+    toast(networkError(err), 'err');
+  }
+}
+
+async function sendReportNow(period) {
+  const btns = document.querySelectorAll('#tg-actions button');
+  btns.forEach(b => b.disabled = true);
+  toast('Menyusun laporan… bisa memakan waktu beberapa detik.');
+  try {
+    const res = await apiFetch(`/api/reports/monthly/send?period=${period}`, { method: 'POST' });
+    if (!res.ok) { toast(await friendlyError(res, 'Gagal mengirim laporan.'), 'err'); return; }
+    const data = await res.json();
+    if (data.status === 'sent') toast('Laporan terkirim ke Telegram. Cek chat bot Anda.');
+    else toast(data.detail || `Laporan tidak terkirim (${data.status}).`, 'err');
+  } catch (err) {
+    toast(networkError(err), 'err');
+  } finally {
+    btns.forEach(b => b.disabled = false);
   }
 }
 
