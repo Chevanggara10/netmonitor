@@ -6,7 +6,7 @@ Model database:
 - AlertRule     : aturan kapan notifikasi dikirim untuk sebuah target
 """
 from datetime import datetime
-from sqlalchemy import String, Integer, Float, DateTime, ForeignKey, Boolean
+from sqlalchemy import String, Integer, Float, DateTime, ForeignKey, Boolean, Index, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -60,6 +60,9 @@ class MonitorTarget(Base):
 
 class CheckResult(Base):
     __tablename__ = "check_results"
+    # Hampir semua query (riwayat, agregat jam, export, laporan) memfilter
+    # target_id + rentang checked_at; index komposit ini menghindari full scan.
+    __table_args__ = (Index("ix_check_results_target_checked", "target_id", "checked_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     target_id: Mapped[int] = mapped_column(ForeignKey("monitor_targets.id"))
@@ -107,6 +110,23 @@ class AlertRule(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     target: Mapped["MonitorTarget"] = relationship(back_populates="alert_rule")
+
+
+class MonthlyReportLog(Base):
+    """
+    Catatan laporan bulanan yang sudah diproses per user. Unik (user, period)
+    membuat pengiriman idempoten: server restart / job jalan dobel tidak
+    mengirim laporan yang sama dua kali, dan catch-up tahu apa yang terlewat.
+    """
+    __tablename__ = "monthly_report_log"
+    __table_args__ = (UniqueConstraint("user_id", "period", name="uq_monthly_report_user_period"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    period: Mapped[str] = mapped_column(String(7))  # "YYYY-MM" (bulan yang DILAPORKAN)
+    status: Mapped[str] = mapped_column(String(20))  # sent | failed | skipped
+    detail: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class TelegramLinkToken(Base):

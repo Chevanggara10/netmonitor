@@ -57,6 +57,7 @@ from app.prediction import get_trend_for_target
 from app.chatbot import answer_question
 from app.reporting import get_hourly_aggregate, export_checks_to_csv
 from app.excel_export import export_checks_to_excel
+from app.db_maintenance import schedule_maintenance_jobs
 from app.ml_forecast import get_forecast
 
 # Rate limiting berbasis IP pemanggil. Dipakai di endpoint yang rawan
@@ -76,6 +77,11 @@ async def lifespan(app: FastAPI):
     # bukan auto-create di sini. Jalankan migrasi sebelum start aplikasi.
     scheduler.start()
     await load_all_targets_on_startup()
+    try:
+        schedule_maintenance_jobs(scheduler)
+    except Exception:
+        # Perawatan DB tidak boleh menggagalkan startup web server.
+        logging.getLogger("netmonitor").exception("Gagal mendaftarkan job perawatan database")
     yield
     # --- Shutdown ---
     scheduler.shutdown(wait=False)
