@@ -312,6 +312,65 @@ pakai Task Scheduler Windows (trigger "At log on" atau "At startup",
 action jalankan `run_telegram_bot.py`) atau tool seperti
 [NSSM](https://nssm.cc/) untuk menjadikannya Windows Service.
 
+### Perintah Bot Telegram
+
+| Perintah | Fungsi |
+|---|---|
+| `/link KODE` | Hubungkan chat ke akun web (kode dibuat lewat `POST /api/telegram/link-token`, berlaku 10 menit; tanda `<` `>` hasil salin ikut dimaafkan) |
+| `/status` | Ringkasan semua target (ONLINE/OFFLINE + waktu respons) |
+| `/forecast NAMA_TARGET` | Prediksi waktu respons 24 jam ke depan (nama tidak sensitif huruf besar/kecil) |
+| `/laporan` | Kirim laporan bulan lalu sekarang (ringkasan evaluasi AI + grafik + Excel); `/laporan berjalan` = bulan ini sampai sekarang |
+| `/unlink` | Putuskan chat dari akun |
+| `/help` | Daftar perintah |
+
+Dashboard/API pendukung: `GET /api/telegram/status`, `DELETE /api/telegram/link`,
+`POST /api/reports/monthly/send?period=previous|current`.
+
+### Laporan Bulanan Otomatis
+
+Setiap jam scheduler memeriksa apakah laporan **bulan lalu** sudah terkirim ke tiap
+pengguna yang terhubung ke Telegram. Mulai **tanggal 1 pukul 08.00 WIB** laporan
+dikirim: ringkasan evaluasi, grafik PNG (ketersediaan per target, respons harian,
+uptime harian, prediksi 7 hari bila model tersedia), dan berkas Excel
+(sheet Ringkasan, Harian, Insiden).
+
+- **Idempoten**: dicatat di tabel `monthly_report_log` (unik user + periode), jadi
+  restart atau job ganda tidak mengirim dua kali.
+- **Catch-up**: bila server mati pada tanggal 1, laporan dikirim begitu server
+  hidup lagi. Pengiriman yang gagal dicoba lagi tiap jam.
+- **Analis AI dua lapis**: (1) analis lokal berbasis aturan, selalu aktif dan tanpa
+  internet; (2) narasi Claude **opsional**, nonaktif secara bawaan, hanya menerima
+  angka agregat dengan nama/URL target diganti kode (`Target-A`, ...). Aktifkan hanya
+  bila data boleh keluar dari server: set `REPORT_AI_ENABLED=true` dan `ANTHROPIC_API_KEY`.
+
+| Variable | Default | Fungsi |
+|---|---|---|
+| `REPORT_TIMEZONE` | `Asia/Jakarta` | Zona waktu batas bulan dan jam kirim |
+| `REPORT_SEND_HOUR` | `8` | Jam kirim pada tanggal 1 (0-23) |
+| `REPORT_AI_ENABLED` | *(mati)* | `true` mengaktifkan narasi Claude |
+| `ANTHROPIC_API_KEY` | *(kosong)* | Kunci API untuk narasi Claude (opsional) |
+| `REPORT_AI_MODEL` | `claude-sonnet-5` | Model untuk narasi |
+
+### Perawatan Basis Data
+
+Otomatis dari scheduler (job harian 03.00 + susulan bila backup terakhir > 26 jam):
+
+- **Backup harian** ke folder `backups/` memakai API online-backup SQLite (aman saat DB
+  dipakai, ditulis ke file sementara lalu di-rename). Disimpan `BACKUP_KEEP` terakhir (default 14).
+  Salin folder ini juga ke disk/penyimpanan lain.
+- **Retensi**: `check_results` lebih tua dari `RETENTION_DAYS` (default 400) dihapus bertahap.
+- **Cek integritas** mingguan (Minggu).
+- Indeks komposit `(target_id, checked_at)` pada `check_results` untuk semua kueri riwayat/laporan.
+
+Manual: `python -m app.db_maintenance backup | prune | check`.
+
+Perkiraan pertumbuhan: ~460 byte/baris. 1 target @60 detik = ~525 ribu baris/tahun (~240 MB);
+20 target = ~4,8 GB/tahun. Pindah ke PostgreSQL bila target > ~20, interval < 15 detik, atau DB > 1 GB.
+
+Catatan data: model prediksi hanya dilatih dari **segmen data kontigu** (celah > 6 jam memutus
+data, minimal 48 jam). Pemantauan yang hanya jalan saat komputer menyala tidak akan menghasilkan
+model; jalankan sistem di server yang menyala terus.
+
 ## Hosting/Deploy Production
 
 Development lokal (langkah di atas) cukup untuk dicoba sendiri. Untuk
