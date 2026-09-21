@@ -58,6 +58,7 @@ from app.chatbot import answer_question
 from app.reporting import get_hourly_aggregate, export_checks_to_csv
 from app.excel_export import export_checks_to_excel
 from app.db_maintenance import schedule_maintenance_jobs
+from app.monthly_report import generate_and_send_report, schedule_report_jobs
 from app.ml_forecast import get_forecast
 
 # Rate limiting berbasis IP pemanggil. Dipakai di endpoint yang rawan
@@ -82,6 +83,10 @@ async def lifespan(app: FastAPI):
     except Exception:
         # Perawatan DB tidak boleh menggagalkan startup web server.
         logging.getLogger("netmonitor").exception("Gagal mendaftarkan job perawatan database")
+    try:
+        schedule_report_jobs(scheduler)
+    except Exception:
+        logging.getLogger("netmonitor").exception("Gagal mendaftarkan job laporan bulanan")
     yield
     # --- Shutdown ---
     scheduler.shutdown(wait=False)
@@ -498,6 +503,27 @@ async def telegram_unlink(
         current_user.telegram_chat_id = None
         await db.commit()
     return {"linked": False}
+
+
+# ---------- Endpoint: Laporan Bulanan ----------
+
+@app.post("/api/reports/monthly/send")
+@limiter.limit("3/minute")
+async def send_monthly_report_now(
+    request: Request,
+    period: str = "previous",
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Kirim laporan bulanan ke Telegram akun ini sekarang (untuk uji/permintaan
+    manual). period=previous (bulan lalu, default) atau period=current (bulan berjalan).
+    """
+    result = await generate_and_send_report(
+        db, current_user, mode="current" if period == "current" else "previous", force=True)
+    if result.status == "not_linked":
+        raise HTTPException(status_code=400, detail="Hubungkan Telegram dulu (kartu Hubungkan Telegram di dashboard atau /link di bot).")
+    return {"status": result.status, "detail": result.detail}
 
 
 # ---------- Endpoint: Chatbot Berbasis Data ----------

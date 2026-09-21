@@ -19,7 +19,7 @@ from datetime import datetime
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from telegram import Bot, Update
+from telegram import Bot, InputMediaPhoto, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from app.database import AsyncSessionLocal
@@ -37,6 +37,7 @@ HELP_TEXT = (
     "/link KODE - hubungkan chat ini ke akun web (kode dari dashboard, berlaku 10 menit)\n"
     "/status - ringkasan semua target (ONLINE/OFFLINE)\n"
     "/forecast NAMA_TARGET - prediksi response time 24 jam ke depan\n"
+    "/laporan - kirim laporan bulan lalu (ringkasan AI, grafik, Excel); /laporan berjalan = bulan ini sampai sekarang\n"
     "/unlink - putuskan chat ini dari akun\n"
     "/help - tampilkan bantuan ini"
 )
@@ -259,6 +260,89 @@ async def send_alert(chat_id: str, message: str) -> bool:
         return False
 
 
+_REPORT_STATUS_TEXT = {
+    "no_targets": "Belum ada target monitoring, jadi belum ada yang dilaporkan.",
+    "no_data": "Belum ada data monitoring pada periode itu. Coba /laporan berjalan untuk bulan ini.",
+    "failed": "Laporan gagal terkirim. Coba lagi beberapa saat lagi.",
+    "inactive": "Akun nonaktif. Hubungi admin.",
+}
+
+
+@_safe
+async def handle_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Impor lazy: monthly_report mengimpor modul ini (hindari impor melingkar).
+    from app.monthly_report import generate_and_send_report
+
+    mode = "current" if context.args and context.args[0].lower() in ("berjalan", "current", "sekarang") else "previous"
+    async with _get_session() as db:
+        user = await _linked_active_user(update, db)
+        if user is None:
+            return
+        await update.message.reply_text("Menyusun laporan, mohon tunggu sebentar...")
+        result = await generate_and_send_report(db, user, mode=mode, force=True)
+
+    if result.status != "sent":
+        await update.message.reply_text(_REPORT_STATUS_TEXT.get(result.status, result.detail or "Laporan tidak dapat dibuat."))
+
+
+MAX_CAPTION_LEN = 1000  # batas caption Telegram 1024
+
+
+def _usable_token() -> str | None:
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not token or not TOKEN_FORMAT.match(token):
+        logger.info("[dry-run] TELEGRAM_BOT_TOKEN belum di-set / tidak valid, lampiran tidak dikirim.")
+        return None
+    return token
+
+
+def _caption(text: str) -> str:
+    return text if len(text) <= MAX_CAPTION_LEN else text[: MAX_CAPTION_LEN - 1] + "…"
+
+
+async def send_photos(chat_id: str, photos: list[tuple[bytes, str]]) -> int:
+    """
+    Kirim daftar (bytes_png, caption) sebagai album (maks 10 per album; 1 foto
+    tunggal memakai send_photo karena album minimal 2). Return jumlah foto yang
+    BENAR-BENAR terkirim; tidak pernah melempar.
+    """
+    token = _usable_token()
+    if not token or not photos:
+        return 0
+
+    delivered = 0
+    try:
+        async with Bot(token=token) as bot:
+            for start in range(0, len(photos), 10):
+                chunk = photos[start:start + 10]
+                try:
+                    if len(chunk) == 1:
+                        await bot.send_photo(chat_id=chat_id, photo=chunk[0][0], caption=_caption(chunk[0][1]))
+                    else:
+                        media = [InputMediaPhoto(media=data, caption=_caption(cap)) for data, cap in chunk]
+                        await bot.send_media_group(chat_id=chat_id, media=media)
+                    delivered += len(chunk)
+                except Exception as exc:
+                    logger.warning(f"Gagal kirim album foto ke chat {chat_id}: {type(exc).__name__}: {exc}")
+    except Exception as exc:
+        logger.warning(f"Gagal membuka koneksi Telegram untuk foto: {type(exc).__name__}: {exc}")
+    return delivered
+
+
+async def send_document(chat_id: str, data: bytes, filename: str, caption: str = "") -> bool:
+    """Kirim satu file (mis. Excel). True bila terkirim; tidak pernah melempar."""
+    token = _usable_token()
+    if not token:
+        return False
+    try:
+        async with Bot(token=token) as bot:
+            await bot.send_document(chat_id=chat_id, document=data, filename=filename, caption=_caption(caption))
+        return True
+    except Exception as exc:
+        logger.warning(f"Gagal kirim dokumen ke chat {chat_id}: {type(exc).__name__}: {exc}")
+        return False
+
+
 async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error("Error tak tertangani di bot", exc_info=context.error)
 
@@ -277,6 +361,7 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("unlink", handle_unlink))
     application.add_handler(CommandHandler("status", handle_status))
     application.add_handler(CommandHandler("forecast", handle_forecast))
+    application.add_handler(CommandHandler("laporan", handle_report))
     application.add_handler(MessageHandler(filters.TEXT | filters.COMMAND, handle_unknown))
     application.add_error_handler(_on_error)
     return application

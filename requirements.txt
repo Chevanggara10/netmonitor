@@ -22,3 +22,5 @@ statsmodels
 joblib
 pandas
 python-telegram-bot
+matplotlib
+tzdata
